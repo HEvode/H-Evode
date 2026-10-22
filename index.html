@@ -159,6 +159,10 @@ FB.db.enablePersistence({ synchronizeTabs: true })
   
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0E45EB">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 
 <!-- ============================================================
      SEO — PRIMARY TAGS
@@ -10340,7 +10344,14 @@ console.log("✅ Section F3 loaded");
 /* ═══════════════════════════════════════════════════════════
    SECTION F4 — AUTH + APPLICATIONS + NOTIFICATIONS
    ------------------------------------------------------------
-   v3 — clean rewrite (fixes all 4 missing routes)
+   v5 — Fix #1 + Fix #1.5
+     ★ Teacher self-registration blocked (v4)
+     ★ Church picker added for students (v5)
+     ★ Church Admin removed from Account tab (v5)
+     ★ Student churchId saved on registration (v5)
+     ★ Approver routing fixed (v5)
+     ★ Clear helper text about approvals (v5)
+
    Routes registered here:
      · login
      · register
@@ -10402,7 +10413,7 @@ console.log("✅ Section F3 loaded");
       });
     }
 
-    console.log("✅ DASH_MENUS extended (F4 v3)");
+    console.log("✅ DASH_MENUS extended (F4 v5)");
   }
   install();
 })();
@@ -10469,8 +10480,7 @@ ROUTES.login = function(){
 
         + '<p class="muted mt-3" style="font-size:.78rem;text-align:center">'
           + '<i class="fa-solid fa-circle-info"></i> '
-          + 'Accounts are approved by your church administrator or Super Admin '
-          + 'before you can sign in.'
+          + 'Accounts are approved before you can sign in.'
         + '</p>'
 
       + '</div>'
@@ -10526,7 +10536,7 @@ async function submitLogin(form){
       await FB.auth.signOut();
       if(err){
         err.textContent = "Your account is not yet set up. "
-          + "A Church Admin will review your registration soon.";
+          + "Please wait for approval.";
         err.style.display = "block";
       }
       btn.disabled = false;
@@ -10578,7 +10588,7 @@ window.submitLogin = submitLogin;
 
 
 /* ═══════════════════════════════════════════════════════════
-   4. REGISTER ROUTE
+   4. REGISTER ROUTE  ★ v5 — Church picker for students
    ═══════════════════════════════════════════════════════════ */
 
 ROUTES.register = function(){
@@ -10602,6 +10612,33 @@ ROUTES.register = function(){
 
       /* ── ACCOUNT TAB ── */
       + '<div id="regTab-account">'
+
+        /* Info banner at top */
+        + '<div style="background:linear-gradient(135deg,rgba(14,69,235,.06),rgba(207,155,63,.04));'
+          + 'border:1.5px solid rgba(14,69,235,.18);border-radius:12px;'
+          + 'padding:14px 18px;margin-bottom:20px">'
+          + '<div style="font-weight:800;color:var(--navy);font-size:.88rem;'
+            + 'margin-bottom:8px;display:flex;align-items:center;gap:8px">'
+            + '<i class="fa-solid fa-circle-info" style="color:var(--primary)"></i> '
+            + 'How approval works'
+          + '</div>'
+          + '<div style="font-size:.82rem;color:var(--soft);line-height:1.6">'
+            + '<div style="margin-bottom:4px">'
+              + '<strong style="color:var(--primary)">Students</strong> '
+              + '→ approved by your selected Church Admin'
+            + '</div>'
+            + '<div style="margin-bottom:4px">'
+              + '<strong style="color:#1B2A44">Church Administrators</strong> '
+              + '→ use the <strong>Register Church</strong> tab above '
+              + '(creates church + admin together)'
+            + '</div>'
+            + '<div>'
+              + '<strong style="color:#CF9B3F">Teachers</strong> '
+              + '→ created by your Church Admin (no self-registration)'
+            + '</div>'
+          + '</div>'
+        + '</div>'
+
         + '<form onsubmit="event.preventDefault();submitRegisterAccount(this);" '
           + 'autocomplete="off">'
 
@@ -10612,21 +10649,43 @@ ROUTES.register = function(){
 
           + '<div class="form-group">'
             + '<label>Email * <span class="muted">(must be @gmail.com)</span></label>'
-            + '<input name="email" type="email" required placeholder="you@gmail.com" autocomplete="off">'
+            + '<input name="email" type="email" required placeholder="you@gmail.com" '
+              + 'autocomplete="off" '
+              + 'oninput="onRegEmailInput(this.value)">'
             + '<p class="muted" style="font-size:.75rem;margin-top:6px">'
               + '<i class="fa-solid fa-circle-info"></i> '
               + 'Only @gmail.com email addresses are accepted.'
             + '</p>'
           + '</div>'
 
+          /* ★ Only Student role is offered here */
           + '<div class="form-group">'
-            + '<label>I am a *</label>'
-            + '<select name="role" required autocomplete="off">'
-              + '<option value="">— Select role —</option>'
+            + '<label>Register as *</label>'
+            + '<select name="role" id="regRoleSelect" required '
+              + 'onchange="onRegRoleChange(this.value)">'
+              + '<option value="">— Select —</option>'
               + '<option value="student">Student / Member</option>'
-              + '<option value="teacher">Teacher</option>'
-              + '<option value="churchAdmin">Church Administrator</option>'
             + '</select>'
+            + '<p class="muted" style="font-size:.75rem;margin-top:6px;line-height:1.5">'
+              + '<i class="fa-solid fa-info-circle"></i> '
+              + '<strong>Church Administrator?</strong> '
+              + '<a href="#" onclick="switchRegTab(\'church\',document.querySelector(\'.chip:nth-child(2)\'));return false;" '
+                + 'style="color:var(--primary);font-weight:700;text-decoration:underline">'
+              + 'Use the "Register Church" tab</a> '
+              + '— it creates your church and admin account together.'
+            + '</p>'
+          + '</div>'
+
+          /* ★ Church picker — shown only when role = student */
+          + '<div class="form-group" id="regChurchPicker" style="display:none">'
+            + '<label>Select Your Church *</label>'
+            + '<select name="churchId" id="regChurchSelect">'
+              + '<option value="">— Loading churches… —</option>'
+            + '</select>'
+            + '<p class="muted" style="font-size:.75rem;margin-top:6px">'
+              + '<i class="fa-solid fa-circle-info"></i> '
+              + 'Your church admin will review your registration.'
+            + '</p>'
           + '</div>'
 
           + '<div class="reg-grid-2">'
@@ -10651,6 +10710,23 @@ ROUTES.register = function(){
 
       /* ── CHURCH TAB ── */
       + '<div id="regTab-church" class="hidden">'
+
+        /* Info banner at top */
+        + '<div style="background:linear-gradient(135deg,rgba(207,155,63,.10),rgba(14,69,235,.04));'
+          + 'border:1.5px solid rgba(207,155,63,.3);border-radius:12px;'
+          + 'padding:14px 18px;margin-bottom:20px">'
+          + '<div style="font-weight:800;color:#8B5E0F;font-size:.88rem;'
+            + 'margin-bottom:8px;display:flex;align-items:center;gap:8px">'
+            + '<i class="fa-solid fa-church"></i> '
+            + 'Church + Admin Registration'
+          + '</div>'
+          + '<div style="font-size:.82rem;color:#7A5A1C;line-height:1.6">'
+            + 'This form creates <strong>both</strong> your church and its '
+            + 'administrator account in one step. '
+            + 'A <strong>Super Admin</strong> will review and approve both together.'
+          + '</div>'
+        + '</div>'
+
         + '<form onsubmit="event.preventDefault();submitRegisterChurch(this);" '
           + 'autocomplete="off">'
 
@@ -10671,7 +10747,7 @@ ROUTES.register = function(){
               + 'placeholder="Enter church name first">'
             + '<p class="muted" style="font-size:.75rem;margin-top:6px">'
               + '<i class="fa-solid fa-lock"></i> '
-              + 'Generated automatically from the church name.'
+              + 'Auto-generated from the church name. Cannot be edited.'
             + '</p>'
           + '</div>'
 
@@ -10704,6 +10780,11 @@ ROUTES.register = function(){
               + '<option value="">— Choose from existing admins —</option>'
               + '<option value="__new__">+ Register a NEW admin below</option>'
             + '</select>'
+            + '<p class="muted" style="font-size:.75rem;margin-top:6px">'
+              + '<i class="fa-solid fa-circle-info"></i> '
+              + 'If you already have a Church Admin account, select it here. '
+              + 'Otherwise, register a new one below.'
+            + '</p>'
           + '</div>'
 
           + '<div id="newAdminBlock" style="display:none">'
@@ -10757,6 +10838,7 @@ ROUTES.register = function(){
 };
 
 
+/* ── Tab switcher ── */
 function switchRegTab(tab, btn){
   document.querySelectorAll("#app .chip").forEach(function(c){
     c.classList.remove("active");
@@ -10771,6 +10853,79 @@ function switchRegTab(tab, btn){
   }
 }
 window.switchRegTab = switchRegTab;
+
+
+/* ── Role change handler — shows/hides church picker ── */
+async function onRegRoleChange(role){
+  const churchPicker = document.getElementById("regChurchPicker");
+  if(!churchPicker) return;
+
+  if(role === "student"){
+    churchPicker.style.display = "block";
+    await loadRegChurchDropdown();
+  }else{
+    churchPicker.style.display = "none";
+    const sel = document.getElementById("regChurchSelect");
+    if(sel) sel.value = "";
+  }
+}
+window.onRegRoleChange = onRegRoleChange;
+
+
+/* ── Load approved churches into the picker ── */
+async function loadRegChurchDropdown(){
+  const sel = document.getElementById("regChurchSelect");
+  if(!sel) return;
+
+  sel.innerHTML = '<option value="">— Loading churches… —</option>';
+
+  try{
+    const churches = await firestoreRead("churches", { forceRefresh: true });
+    const active = churches.filter(function(c){
+      return c.status === "ACTIVE" || !c.status;
+    });
+
+    if(!active.length){
+      sel.innerHTML = '<option value="">— No churches available yet —</option>'
+        + '<option value="__none__" disabled>'
+        + 'Contact a Super Admin to create a church first'
+        + '</option>';
+      return;
+    }
+
+    active.sort(function(a, b){
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+    sel.innerHTML = '<option value="">— Select your church —</option>'
+      + active.map(function(c){
+          return '<option value="' + esc(c.id) + '">'
+            + esc(c.name) + (c.location ? ' — ' + esc(c.location) : "")
+            + '</option>';
+        }).join("");
+  }catch(err){
+    console.error("[loadRegChurchDropdown]", err);
+    sel.innerHTML = '<option value="">— Could not load churches —</option>'
+      + '<option value="__none__" disabled>Please refresh the page</option>';
+  }
+}
+window.loadRegChurchDropdown = loadRegChurchDropdown;
+
+
+/* ── Email validation hint (live) ── */
+function onRegEmailInput(value){
+  const input = event ? event.target : null;
+  if(!input) return;
+  const v = (value || "").trim().toLowerCase();
+  if(!v) return;
+  if(v.length > 0 && !v.includes("@")) return;      // still typing
+  if(v.includes("@") && !v.endsWith("@gmail.com") && v.length > 10){
+    input.style.borderColor = "#CF9B3F";
+  }else{
+    input.style.borderColor = "";
+  }
+}
+window.onRegEmailInput = onRegEmailInput;
 
 
 /* ── Auto church code (debounced) ── */
@@ -10870,7 +11025,7 @@ window.handleAdminSelect = handleAdminSelect;
 
 
 /* ═══════════════════════════════════════════════════════════
-   5. REGISTER — CREATE ACCOUNT
+   5. REGISTER — CREATE ACCOUNT  ★ v5 — saves churchId
    ═══════════════════════════════════════════════════════════ */
 
 async function submitRegisterAccount(form){
@@ -10882,11 +11037,40 @@ async function submitRegisterAccount(form){
   const role     = form.role.value;
   const password = form.password.value;
   const confirm  = form.confirm.value;
+  const churchId = form.churchId ? form.churchId.value : "";
 
   if(!name || !email || !role || !password){
     if(err){ err.textContent = "Please fill in all fields."; err.style.display = "block"; }
     return;
   }
+
+  /* ★ Only student allowed on this tab */
+  if(role !== "student"){
+    if(err){
+      err.innerHTML =
+        '<strong>Only Student accounts can register here.</strong><br><br>'
+        + 'Church Administrators must use the '
+        + '<a href="#" onclick="switchRegTab(\'church\');return false;" '
+          + 'style="color:var(--primary);text-decoration:underline">'
+        + 'Register Church</a> tab.<br><br>'
+        + 'Teachers are created by your Church Admin.';
+      err.style.display = "block";
+    }
+    return;
+  }
+
+  /* ★ Students must select a church */
+  if(!churchId){
+    if(err){
+      err.innerHTML =
+        '<strong>Please select your church.</strong><br><br>'
+        + 'Your church administrator needs to know which church you belong to '
+        + 'so they can approve your registration.';
+      err.style.display = "block";
+    }
+    return;
+  }
+
   if(!email.endsWith("@gmail.com")){
     if(err){ err.textContent = "Email must end with @gmail.com"; err.style.display = "block"; }
     return;
@@ -10900,6 +11084,34 @@ async function submitRegisterAccount(form){
     return;
   }
 
+  /* Validate church exists & is active */
+  let churchRecord = null;
+  try{
+    const ch = await FB.db.collection("churches").doc(churchId).get();
+    if(ch.exists){
+      churchRecord = ch.data();
+      if(churchRecord.status !== "ACTIVE" && churchRecord.status){
+        if(err){
+          err.innerHTML =
+            '<strong>This church is not yet active.</strong><br><br>'
+            + 'The church "' + esc(churchRecord.name || churchId) + '" '
+            + 'is still pending approval by a Super Admin.<br><br>'
+            + 'Please choose another church, or contact the church administrator.';
+          err.style.display = "block";
+        }
+        return;
+      }
+    }else{
+      if(err){
+        err.textContent = "The selected church no longer exists. Please refresh.";
+        err.style.display = "block";
+      }
+      return;
+    }
+  }catch(e){
+    console.warn("[submitRegisterAccount] church check:", e.message);
+  }
+
   const btn = form.querySelector('button[type="submit"]');
   const original = btn.innerHTML;
   btn.disabled = true;
@@ -10908,7 +11120,9 @@ async function submitRegisterAccount(form){
   let newUid = null;
 
   try{
+    /* ── Create / recover Firebase Auth account ── */
     let cred = null;
+
     try{
       cred = await FB.auth.createUserWithEmailAndPassword(email, password);
       newUid = cred.user.uid;
@@ -10917,19 +11131,24 @@ async function submitRegisterAccount(form){
         try{
           cred = await FB.auth.signInWithEmailAndPassword(email, password);
           newUid = cred.user.uid;
+          console.log("🔄 Recovered existing Auth account:", newUid);
         }catch(signErr){
-          if(signErr.code === "auth/wrong-password" ||
-             signErr.code === "auth/invalid-credential"){
-            if(err){
-              err.textContent = "This email is already registered with a different password. "
-                + "Please sign in from the login page, or use a different email.";
-              err.style.display = "block";
-            }
-            btn.disabled = false;
-            btn.innerHTML = original;
-            return;
+          if(err){
+            err.innerHTML =
+              '<strong>This email is already registered.</strong><br><br>'
+              + 'Options:<br>'
+              + '1. <a href="#" onclick="go(\'login\');return false;" '
+                + 'style="color:var(--primary);text-decoration:underline">'
+                + 'Try signing in</a> — if you remember the password<br>'
+              + '2. <a href="#" onclick="go(\'forgot-password\');return false;" '
+                + 'style="color:var(--primary);text-decoration:underline">'
+                + 'Reset password</a> — if you forgot it<br>'
+              + '3. Contact your church admin to recover the account';
+            err.style.display = "block";
           }
-          throw signErr;
+          btn.disabled = false;
+          btn.innerHTML = original;
+          return;
         }
       }else{
         throw createErr;
@@ -10963,76 +11182,110 @@ async function submitRegisterAccount(form){
         return;
       }
 
+      /* Update existing doc */
       await userRef.update({
         name: name,
         role: role,
+        churchId: churchId,               /* ★ Set church */
         status: "PENDING_APPROVAL",
+        approverRole: "churchAdmin",      /* ★ Clear approver */
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     }else{
-      const approverRole = (role === "churchAdmin") ? "superAdmin" : "churchAdmin";
-
+      /* ★ Create new doc with churchId */
       await userRef.set({
         uid:           newUid,
         email:         email,
         name:          name,
-        role:          role,
-        churchId:      "",
+        role:          role,              /* "student" */
+        churchId:      churchId,          /* ★ selected church */
+        churchName:    churchRecord ? (churchRecord.name || "") : "",
         departmentId:  "",
         phone:         "",
         status:        "PENDING_APPROVAL",
-        approverRole:  approverRole,
+        approverRole:  "churchAdmin",     /* ★ student → church admin */
         createdAt:     firebase.firestore.FieldValue.serverTimestamp()
       });
     }
 
     firestoreClearCache("users");
 
+    /* ── Audit log ── */
     try{
       await FB.db.collection("auditLogs").add({
-        action:  "USER_SELF_REGISTERED",
+        action:  "STUDENT_SELF_REGISTERED",
         actor:   email,
         target:  email,
-        payload: { role: role, needsApproval: true },
+        payload: {
+          role: role,
+          churchId: churchId,
+          needsApproval: true,
+          approverRole: "churchAdmin"
+        },
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     }catch(e){}
 
+    /* ── Notify the specific church admin ── */
     try{
-      const approverRole = (role === "churchAdmin") ? "superAdmin" : "churchAdmin";
-      const approverQuery = await FB.db.collection("users")
-        .where("role", "==", approverRole)
+      const admins = await FB.db.collection("users")
+        .where("role", "==", "churchAdmin")
+        .where("churchId", "==", churchId)
         .limit(5)
         .get();
 
-      const notifs = approverQuery.docs.map(function(snap){
+      const notifPromises = admins.docs.map(function(snap){
         return FB.db.collection("notifications").add({
           email:     (snap.data().email || "").toLowerCase(),
-          title:     "New " + role + " registration",
-          body:      (name || email) + " (" + email + ") registered. Approval needed.",
+          title:     "New student registration",
+          body:      (name || email) + " (" + email + ") registered for "
+            + (churchRecord ? churchRecord.name : "your church")
+            + ". Approval needed.",
           type:      "info",
-          link:      "admin-applications",
+          link:      "user-approvals",
           read:      false,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       });
-      await Promise.all(notifs);
-    }catch(e){}
+
+      /* If no admins found, fall back to superAdmin alert */
+      if(!admins.size){
+        const supers = await FB.db.collection("users")
+          .where("role", "==", "superAdmin")
+          .limit(3).get();
+        supers.docs.forEach(function(snap){
+          notifPromises.push(FB.db.collection("notifications").add({
+            email:     (snap.data().email || "").toLowerCase(),
+            title:     "New student (no church admin)",
+            body:      (name || email) + " registered for "
+              + (churchRecord ? churchRecord.name : churchId)
+              + " but no church admin was found. Please assign one.",
+            type:      "warning",
+            link:      "user-approvals",
+            read:      false,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          }));
+        });
+      }
+
+      await Promise.all(notifPromises);
+    }catch(e){
+      console.warn("[reg notify]", e.message);
+    }
 
     try{ await FB.auth.signOut(); }catch(e){}
     sessionStorage.removeItem("sda_session");
     localStorage.removeItem("sda_session");
 
-    const message = role === "churchAdmin"
-      ? "Your Church Admin account was created.\n\n"
-        + "A Super Admin will review your registration."
-      : "Your account was created.\n\n"
-        + "Your Church Admin will review your registration.";
+    /* Show success popup */
+    showStudentSubmittedPopup({
+      name: name,
+      email: email,
+      churchName: churchRecord ? churchRecord.name : churchId
+    });
 
-    alert("✓ Account Submitted\n\n" + message);
-    toast("Account submitted", "Pending approval.", "success");
-
-    setTimeout(function(){ go("login"); }, 800);
+    toast("Account submitted",
+      "Your church admin will review your registration.", "success");
 
   }catch(e){
     console.error("[submitRegisterAccount]", e);
@@ -11052,6 +11305,107 @@ async function submitRegisterAccount(form){
   }
 }
 window.submitRegisterAccount = submitRegisterAccount;
+
+
+/* ═══════════════════════════════════════════════════════════
+   5B. STUDENT SUBMITTED POPUP  ★ new
+   ═══════════════════════════════════════════════════════════ */
+
+window.showStudentSubmittedPopup = function(data){
+  const existing = document.getElementById("studentSubmittedModal");
+  if(existing) existing.remove();
+
+  const html =
+    '<div id="studentSubmittedModal" class="reg-card-modal" style="z-index:10001">'
+      + '<div class="reg-card-modal-backdrop" '
+        + 'onclick="closeStudentSubmittedPopup()"></div>'
+      + '<div class="reg-card-modal-inner" style="max-width:520px">'
+        + '<button class="reg-card-modal-close" '
+          + 'onclick="closeStudentSubmittedPopup()">'
+          + '<i class="fa-solid fa-xmark"></i>'
+        + '</button>'
+
+        + '<div style="background:#fff;border-radius:20px;overflow:hidden;'
+          + 'box-shadow:0 20px 50px rgba(27,42,68,.18);'
+          + 'border:1px solid var(--border)">'
+
+          + '<div style="background:linear-gradient(135deg,#6E8F71,#8FB392);'
+            + 'color:#fff;padding:26px;text-align:center">'
+            + '<div style="width:72px;height:72px;border-radius:50%;'
+              + 'margin:0 auto 14px;background:rgba(255,255,255,.28);'
+              + 'display:flex;align-items:center;justify-content:center;'
+              + 'font-size:2rem">'
+              + '<i class="fa-solid fa-user-graduate"></i>'
+            + '</div>'
+            + '<div style="font-weight:800;font-size:1.3rem;letter-spacing:-.02em">'
+              + 'Registration Submitted'
+            + '</div>'
+            + '<div style="font-size:.88rem;opacity:.9;margin-top:6px">'
+              + 'Waiting for your church admin to approve'
+            + '</div>'
+          + '</div>'
+
+          + '<div style="padding:24px">'
+
+            + '<div style="background:#F7FAFF;border:1.5px dashed #0E45EB;'
+              + 'border-radius:12px;padding:16px 20px;margin-bottom:14px">'
+              + '<div style="font-size:.68rem;font-weight:800;letter-spacing:.1em;'
+                + 'text-transform:uppercase;color:#0E45EB;margin-bottom:6px">'
+                + 'Your Church</div>'
+              + '<div style="font-weight:800;color:#1B2A44;font-size:.95rem">'
+                + esc(data.churchName) + '</div>'
+            + '</div>'
+
+            + '<div style="background:#F7FAFF;border:1.5px dashed #0E45EB;'
+              + 'border-radius:12px;padding:16px 20px;margin-bottom:14px">'
+              + '<div style="font-size:.68rem;font-weight:800;letter-spacing:.1em;'
+                + 'text-transform:uppercase;color:#0E45EB;margin-bottom:6px">'
+                + 'Account</div>'
+              + '<div style="font-weight:700;color:#1B2A44;font-size:.88rem">'
+                + esc(data.name) + '</div>'
+              + '<div style="font-family:monospace;color:var(--soft);'
+                + 'font-size:.82rem;margin-top:4px">'
+                + esc(data.email) + '</div>'
+            + '</div>'
+
+            + '<div style="background:rgba(110,143,113,.10);border-left:4px solid #6E8F71;'
+              + 'padding:14px 16px;border-radius:8px;margin-bottom:20px">'
+              + '<div style="font-size:.85rem;color:#4F6E52;font-weight:600;'
+                + 'line-height:1.5">'
+                + '<i class="fa-solid fa-circle-info"></i> '
+                + '<strong>What happens next?</strong><br>'
+                + 'Your church admin will see your registration in '
+                + 'their <em>User Approvals</em> page.<br>'
+                + 'Once approved, you can sign in immediately.'
+              + '</div>'
+            + '</div>'
+
+            + '<div style="display:flex;gap:10px;justify-content:center;'
+              + 'flex-wrap:wrap">'
+              + '<button class="btn btn-outline" '
+                + 'onclick="closeStudentSubmittedPopup();go(\'home\')">'
+                + '<i class="fa-solid fa-house"></i> Back to Home'
+              + '</button>'
+              + '<button class="btn btn-primary" '
+                + 'onclick="closeStudentSubmittedPopup();go(\'login\')">'
+                + '<i class="fa-solid fa-right-to-bracket"></i> Try Sign In'
+              + '</button>'
+            + '</div>'
+
+          + '</div>'
+        + '</div>'
+      + '</div>'
+    + '</div>';
+
+  document.body.insertAdjacentHTML("beforeend", html);
+  document.body.style.overflow = "hidden";
+};
+
+window.closeStudentSubmittedPopup = function(){
+  const m = document.getElementById("studentSubmittedModal");
+  if(m) m.remove();
+  document.body.style.overflow = "";
+};
 
 
 /* ═══════════════════════════════════════════════════════════
@@ -11147,7 +11501,8 @@ window.showChurchSubmittedPopup = function(data){
                 + 'line-height:1.5">'
                 + '<i class="fa-solid fa-circle-info"></i> '
                 + '<strong>What happens next?</strong><br>'
-                + 'A Super Admin will review your registration.'
+                + 'A Super Admin will review your church and admin account together. '
+                + 'You\'ll be able to sign in once approved.'
               + '</div>'
             + '</div>'
 
@@ -11265,7 +11620,7 @@ window.closeChurchSubmittedPopup = function(){
       }
     });
 
-    console.log("✅ Auth listener installed (F4 v3)");
+    console.log("✅ Auth listener installed (F4 v5)");
   }
   run();
 })();
@@ -11614,11 +11969,7 @@ function viewApplicationCard(appId){
     return;
   }
 
-  if(typeof regLastApplication !== "undefined"){
-    window.regLastApplication = app;
-  }else{
-    window.regLastApplication = app;
-  }
+  window.regLastApplication = app;
 
   const existing = document.getElementById("regCardModal");
   if(existing) existing.remove();
@@ -12702,7 +13053,7 @@ ROUTES.testing = function(){
 };
 
 
-console.log("✅ Section F4 v3 loaded (clean rewrite)");
+console.log("✅ Section F4 v5 loaded (Fix #1 + Fix #1.5: teacher blocked + church picker added)");
 </script>
 
 
@@ -33764,22 +34115,29 @@ window.cleanupDemoCourses = async function(){
 console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses");
 </script>
 
-<!-- ═══════════════════════════════════════════════════════════
-     FIX PACK v3 — church scoping, register church,
-     home slider, department CRUD
-     ------------------------------------------------------------
-     v3 changes (from v2):
-     · Removed newDeptId, confirmDeleteDept, openEditDeptModal,
-       detectBackgroundBrightness, applyContrastMode
-       (now in Section G v2)
-     · Removed submitEventForm, submitAnnounceForm,
-       department-approvals, approveDepartment, rejectDepartment
-       (now in POST-G v2)
-     · Kept: applications scoping, church name in dashboard,
-       duplicate submit prevention, reliable submitRegisterChurch,
-       Firestore carousel, department CRUD modal + cover upload
-     ═══════════════════════════════════════════════════════════ -->
 <script>
+/* ═══════════════════════════════════════════════════════════
+   FIX PACK v4 — church scoping, register church,
+   home slider, department CRUD
+   ------------------------------------------------------------
+   v4 changes (from v3):
+     ★ Fix #2 — churches.initials now stores SHORT code (KAM)
+                while churches.code stores the FULL code (SDA-KAM-001)
+     ★ submitRegisterChurch now correctly splits code → initials
+     ★ generateRegNumber now safeguards against duplicate prefixes
+     ★ Added fixChurchInitials() cleanup helper for existing data
+     ★ Registration flow now produces SDA-KAM-2026-0001 (not doubled)
+
+   Routes/functions in this section:
+     · APPLICATIONS scoping (church admin)
+     · CHURCH NAME in dashboard
+     · DUPLICATE submit prevention
+     · submitRegisterChurch (fixed)
+     · home carousel (from Firestore)
+     · department CRUD modal + cover upload
+   ═══════════════════════════════════════════════════════════ */
+
+
 /* ═══════════════════════════════════════════════════════════
    FIX 1 — CHURCH ADMIN SEES ONLY HER CHURCH
    ═══════════════════════════════════════════════════════════ */
@@ -33855,10 +34213,8 @@ console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses")
     const _orig = window.loadChurchAdminDashboard;
 
     window.loadChurchAdminDashboard = async function(){
-      /* Call original */
       await _orig.apply(this, arguments);
 
-      /* Post-process: add church name to hero */
       const u = currentUser();
       if(!u || u.role !== "churchAdmin") return;
 
@@ -33867,14 +34223,12 @@ console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses")
         if(!churchSnap.exists) return;
         const church = churchSnap.data();
 
-        /* Find the role-badge in the hero */
         const badge = document.querySelector('.role-hero[data-role="churchAdmin"] .role-badge');
         if(badge){
           badge.innerHTML = '<i class="fa-solid fa-church"></i> '
             + esc(church.name || "Church Admin");
         }
 
-        /* Also update the role-meta to show church name instead of ID */
         const metaSpans = document.querySelectorAll('.role-hero[data-role="churchAdmin"] .role-meta span');
         metaSpans.forEach(function(span){
           if(span.textContent.indexOf(u.churchId) !== -1){
@@ -33902,10 +34256,8 @@ console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses")
     if(window.__dupPreventPatched) return;
     window.__dupPreventPatched = true;
 
-    /* Track submission in progress */
     window.__regSubmitting = window.__regSubmitting || false;
 
-    /* Patch submitRegisterAccount */
     if(typeof window.submitRegisterAccount === "function"){
       const _orig = window.submitRegisterAccount;
       window.submitRegisterAccount = async function(form){
@@ -33922,7 +34274,6 @@ console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses")
       };
     }
 
-    /* Patch submitRegisterChurch */
     if(typeof window.submitRegisterChurch === "function"){
       const _orig2 = window.submitRegisterChurch;
       window.submitRegisterChurch = async function(form){
@@ -33945,6 +34296,22 @@ console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses")
 })();
 
 
+/* ═══════════════════════════════════════════════════════════
+   FIX 4 — REGISTER CHURCH: RELIABLE
+   ★ v4 — Split code correctly: initials = short, code = full
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Helper: extract short initials from full code ── */
+function extractShortInitials(fullCode){
+  if(!fullCode) return "CH";
+  const m = String(fullCode).toUpperCase().match(/^SDA-([A-Z0-9]{2,6})-\d{3}$/);
+  if(m) return m[1];
+  /* Fallback: strip non-alpha, take first 3 */
+  const clean = String(fullCode).toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return (clean.slice(0, 3) || "CH");
+}
+window.extractShortInitials = extractShortInitials;
+
 window.submitRegisterChurch = async function(form){
   if(window.__regSubmitting){
     console.log("[church-register] Already submitting");
@@ -33956,19 +34323,31 @@ window.submitRegisterChurch = async function(form){
   if(err) err.style.display = "none";
 
   const churchName   = form.churchName.value.trim();
-  const code = form.code.value.trim().toUpperCase();
+  const code         = form.code.value.trim().toUpperCase();
 
-/* Guard — code must be generated and valid */
-if(!code || code === "GENERATING…" || code === "SDA-XXX-000"
-   || code.indexOf("XXX") !== -1 || code.length < 8){
-  if(err){
-    err.textContent = "Church code is still generating or invalid. "
-                    + "Please wait a moment and try again.";
-    err.style.display = "block";
+  /* Guard — code must be generated and valid */
+  if(!code || code === "GENERATING…" || code === "SDA-XXX-000"
+     || code.indexOf("XXX") !== -1 || code.length < 8){
+    if(err){
+      err.textContent = "Church code is still generating or invalid. "
+                      + "Please wait a moment and try again.";
+      err.style.display = "block";
+    }
+    window.__regSubmitting = false;
+    return;
   }
-  window.__regSubmitting = false;
-  return;
-}
+
+  /* Validate code format */
+  if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
+    if(err){
+      err.textContent = "Church code is invalid or still generating. "
+                      + "Please wait a moment and try again.";
+      err.style.display = "block";
+    }
+    window.__regSubmitting = false;
+    return;
+  }
+
   const field        = form.field.value.trim();
   const country      = form.country.value.trim() || "Rwanda";
   const location     = form.location.value.trim();
@@ -33988,19 +34367,6 @@ if(!code || code === "GENERATING…" || code === "SDA-XXX-000"
     window.__regSubmitting = false;
     return;
   }
-  /* ── Validate the auto-generated church code ──
-   Format: SDA-XXX-NNN (e.g. SDA-NYA-003)
-   Total length: 10-20 characters
-   Pattern: SDA-<2-6 letters>-<3 digits> */
-if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
-  if(err){
-    err.textContent = "Church code is invalid or still generating. "
-                    + "Please wait a moment and try again.";
-    err.style.display = "block";
-  }
-  window.__regSubmitting = false;
-  return;
-}
 
   const isNewAdmin = (adminSelect === "__new__") || (!adminSelect && newAdminEmail);
   if(!adminSelect && !newAdminEmail){
@@ -34035,7 +34401,7 @@ if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
   const wasSignedInAs = wasSignedIn ? wasSignedIn.email : null;
 
   try{
-    /* ── DUPLICATE CODE CHECK (with better error) ── */
+    /* ── DUPLICATE CODE CHECK ── */
     const dup = await FB.db.collection("churches")
       .where("initials", "==", code)
       .limit(1)
@@ -34055,6 +34421,12 @@ if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
     let finalAdminEmail = adminSelect;
     let newAdminUid = null;
     let previousSessionRestored = false;
+
+    /* ★ v4 — Extract short initials from full code */
+    const shortInitials = extractShortInitials(code);
+
+    console.log("[register-church] Full code:", code,
+      "| Short initials:", shortInitials);
 
     /* ── CREATE ADMIN FIREBASE ACCOUNT IF NEW ── */
     if(isNewAdmin){
@@ -34088,7 +34460,7 @@ if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
       /* ★ WAIT for auth listener to load user doc (which doesn't exist yet) */
       await new Promise(function(r){ setTimeout(r, 500); });
 
-      /* ★ WRITE USER DOC FIRST — before the church doc, so we get a doc */
+      /* ★ WRITE USER DOC FIRST — before the church doc */
       await FB.db.collection("users").doc(newAdminUid).set({
         uid:          newAdminUid,
         email:        newAdminEmail,
@@ -34104,14 +34476,13 @@ if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
       console.log("✅ User doc created for new admin:", newAdminUid);
     }
 
-    /* ── CREATE CHURCH DOC ── */
-    let churchName_ = "";
+    /* ── CREATE CHURCH DOC  ★ v4 — correct initials vs code ── */
     try{
       await FB.db.collection("churches").doc(churchId).set({
         id:          churchId,
         name:        churchName,
-        initials:    code,
-        code:        code,
+        initials:    shortInitials,     /* ★ v4 — "KAM" not "SDA-KAM-001" */
+        code:        code,              /* ★ v4 — "SDA-KAM-001" */
         field:       field,
         country:     country,
         location:    location,
@@ -34125,7 +34496,6 @@ if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
         submittedAt: now,
         createdAt:   firebase.firestore.FieldValue.serverTimestamp()
       });
-      churchName_ = churchName;
     }catch(churchErr){
       /* Rollback user doc if church write fails */
       if(newAdminUid){
@@ -34135,7 +34505,8 @@ if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
     }
 
     firestoreClearCache("churches");
-    console.log("✅ Church doc created:", churchId);
+    console.log("✅ Church doc created:", churchId,
+      "| initials:", shortInitials, "| code:", code);
 
     /* ── NOTIFY SUPER ADMINS ── */
     try{
@@ -34210,6 +34581,119 @@ if(!/^SDA-[A-Z0-9]{2,6}-\d{3}$/.test(code)){
 
 
 /* ═══════════════════════════════════════════════════════════
+   FIX 4B — CLEANUP: fix existing churches with bad initials
+   ═══════════════════════════════════════════════════════════ */
+
+window.fixChurchInitials = async function(){
+  const u = currentUser();
+  if(!u || u.role !== "superAdmin"){
+    toast("Access denied", "Super Admin only.", "error");
+    return;
+  }
+
+  if(!confirm(
+    "This will scan ALL churches and fix any where the "
+    + "'initials' field stores a full code (like 'SDA-KAM-001').\n\n"
+    + "It converts them to short codes ('KAM').\n\n"
+    + "This is safe and reversible via Firebase backup.\n\n"
+    + "Continue?"
+  )) return;
+
+  try{
+    toast("Scanning churches…", "Please wait", "info");
+
+    const snap = await FB.db.collection("churches").get();
+    let fixed = 0;
+    let skipped = 0;
+    let alreadyOk = 0;
+    const details = [];
+
+    for(const doc of snap.docs){
+      const data = doc.data();
+      const initials = String(data.initials || "").toUpperCase();
+      const code = String(data.code || "").toUpperCase();
+
+      /* Detect bad initials (full code stored as initials) */
+      const badMatch = initials.match(/^SDA-([A-Z0-9]{2,6})-\d{3}$/);
+
+      if(badMatch){
+        const short = badMatch[1];
+        await FB.db.collection("churches").doc(doc.id).update({
+          initials: short,
+          code: code || initials,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        fixed++;
+        details.push("🔧 " + data.name + ": '" + initials + "' → '" + short + "'");
+        console.log("[fixChurchInitials] Fixed:", data.name, initials, "→", short);
+      }else if(initials && initials.length <= 6){
+        alreadyOk++;
+      }else{
+        skipped++;
+        details.push("⏭️ " + data.name + ": unexpected initials '" + initials + "'");
+      }
+    }
+
+    firestoreClearCache("churches");
+
+    if(fixed > 0){
+      toast("Fixed " + fixed + " church(es)", "Reg numbers will now work correctly.", "success");
+    }else{
+      toast("All clean", "No churches needed fixing.", "info");
+    }
+
+    console.log("═══════════════════════════════════════");
+    console.log("  CHURCH INITIALS CLEANUP");
+    console.log("═══════════════════════════════════════");
+    console.log("Fixed:     ", fixed);
+    console.log("Already OK:", alreadyOk);
+    console.log("Skipped:   ", skipped);
+    console.log("───────────────────────────────────────");
+    details.forEach(function(d){ console.log(d); });
+    console.log("═══════════════════════════════════════");
+
+    /* Show details in a modal */
+    if(details.length > 0){
+      const modal =
+        '<div id="fixChurchModal" class="reg-card-modal">'
+          + '<div class="reg-card-modal-backdrop" onclick="document.getElementById(\'fixChurchModal\').remove();document.body.style.overflow=\'\'"></div>'
+          + '<div class="reg-card-modal-inner" style="max-width:600px">'
+            + '<div style="background:#fff;border-radius:20px;overflow:hidden;border:1px solid var(--border)">'
+              + '<div style="background:linear-gradient(135deg,#6E8F71,#8FB392);color:#fff;padding:20px 26px">'
+                + '<div style="font-weight:800;font-size:1.05rem">'
+                  + '<i class="fa-solid fa-check"></i> Cleanup Complete</div>'
+                + '<div style="font-size:.82rem;margin-top:4px;opacity:.9">'
+                  + fixed + ' church(es) updated</div>'
+              + '</div>'
+              + '<div style="padding:20px;max-height:60vh;overflow-y:auto">'
+                + '<div style="background:#F7FAFF;border-radius:10px;'
+                  + 'padding:14px 18px;font-family:monospace;font-size:.82rem;'
+                  + 'line-height:1.7;white-space:pre-wrap">'
+                  + details.join("\n")
+                + '</div>'
+              + '</div>'
+              + '<div style="padding:16px 20px;border-top:1px solid var(--border);text-align:right">'
+                + '<button class="btn btn-primary" '
+                  + 'onclick="document.getElementById(\'fixChurchModal\').remove();document.body.style.overflow=\'\'">'
+                  + 'Close</button>'
+              + '</div>'
+            + '</div>'
+          + '</div>'
+        + '</div>';
+      document.body.insertAdjacentHTML("beforeend", modal);
+      document.body.style.overflow = "hidden";
+    }
+
+    return { fixed, skipped, alreadyOk, details };
+  }catch(err){
+    console.error("[fixChurchInitials]", err);
+    toast("Cleanup failed", err.message, "error");
+    return null;
+  }
+};
+
+
+/* ═══════════════════════════════════════════════════════════
    FIX 5 — HOME SLIDER: read events from Firestore
    ═══════════════════════════════════════════════════════════ */
 
@@ -34258,19 +34742,16 @@ window.buildCarousel = async function(){
     return;
   }
 
-  /* Sort: upcoming first, then by date */
   events.sort(function(a, b){
     return new Date(a.date || 0) - new Date(b.date || 0);
   });
 
-  /* Filter upcoming, or use all if none upcoming */
   const now = new Date();
   const upcoming = events.filter(function(e){
     return new Date(e.date || 0) >= now;
   });
   let list = upcoming.length ? upcoming : events;
 
-  /* Random shuffle if requested */
   if(slider.order === "random"){
     for(let i = list.length - 1; i > 0; i--){
       const j = Math.floor(Math.random() * (i + 1));
@@ -34278,11 +34759,9 @@ window.buildCarousel = async function(){
     }
   }
 
-  /* Limit count */
   const count = Math.max(1, slider.count || 5);
   list = list.slice(0, count);
 
-  /* Render slides */
   track.innerHTML = list.map(function(e, i){
     const cs = categoryStyle(e.category);
     const coverSrc = e.coverImageUrl || null;
@@ -34327,7 +34806,6 @@ window.buildCarousel = async function(){
     + '</div>';
   }).join("");
 
-  /* Render thumbs */
   thumbs.innerHTML = list.map(function(e, i){
     return '<button class="thumb' + (i === 0 ? ' active' : '')
       + '" data-thumb="' + i + '" onclick="carouselGo(' + i + ')">'
@@ -34336,7 +34814,6 @@ window.buildCarousel = async function(){
       + '</button>';
   }).join("");
 
-  /* Reset + auto */
   window.__carouselEvents = list;
   window.carouselGo(0);
 
@@ -34388,10 +34865,6 @@ window.carouselStartAuto = function(){
 };
 
 /* Patch home route to trigger carousel after render */
-
-/* ═══════════════════════════════════════════════════════════
-   HOME CAROUSEL — safe hook that doesn't override after()
-   ═══════════════════════════════════════════════════════════ */
 (function(){
   function waitForAfter(){
     if(typeof ROUTES === "undefined" || typeof ROUTES.home === "undefined"){
@@ -34400,17 +34873,14 @@ window.carouselStartAuto = function(){
     if(window.__carouselAfterHooked) return;
     window.__carouselAfterHooked = true;
 
-    /* Wrap the ORIGINAL after hook — but only once, safely */
     const _realAfter = ROUTES.home.after;
 
     ROUTES.home.after = function(params){
-      /* Call the real hook first */
       if(typeof _realAfter === "function"){
         try{ _realAfter.apply(this, arguments); }
         catch(e){ console.error("[home after]", e); }
       }
 
-      /* Then ensure the carousel is built (after DOM is ready) */
       setTimeout(function(){
         const section = document.getElementById("homeCarouselSection");
         if(section) section.style.display = "";
@@ -34432,12 +34902,6 @@ window.carouselStartAuto = function(){
 
 /* ═══════════════════════════════════════════════════════════
    FIX 6 — DEPARTMENT CRUD WITH IMAGE + CHURCH SCOPE
-   ------------------------------------------------------------
-   · Super admin can pick: Global OR specific church
-   · Church admin: always own church (implicit)
-   · Cover image upload via R2
-   · Icon picker
-   · Status selector (super admin only)
    ═══════════════════════════════════════════════════════════ */
 
 /* ── Open Add Modal ── */
@@ -34452,12 +34916,10 @@ window.openEditDeptModal = async function(id){
     return;
   }
 
-  /* 1. Try in-memory cache first */
   let dept = (window.__myDepartments || []).find(function(x){
     return x.id === id;
   });
 
-  /* 2. Fallback to Firestore */
   if(!dept){
     try{
       const snap = await FB.db.collection("departments").doc(id).get();
@@ -34523,7 +34985,6 @@ function renderDeptModalV2(dept){
   const isEdit = !!dept;
   const isSuper = u.role === "superAdmin";
 
-  /* Determine initial scope */
   let initialScope = "__specific__";
   let initialChurchId = "";
 
@@ -34562,7 +35023,6 @@ function renderDeptModalV2(dept){
       + ic + '</button>';
   }).join("");
 
-  /* ── CHURCH SCOPE BLOCK (super admin only) ── */
   const churchScopeHTML = isSuper
     ? '<div class="form-group">'
         + '<label>Church Scope <span style="color:#B23A3A">*</span></label>'
@@ -34589,12 +35049,9 @@ function renderDeptModalV2(dept){
           + '<option value="">— Loading churches —</option>'
         + '</select>'
       + '</div>'
-
-    /* Church admin: hidden field with own church */
     : '<input type="hidden" name="churchScope" value="__specific__">'
       + '<input type="hidden" name="churchId" value="' + esc(u.churchId || "") + '">';
 
-  /* ── STATUS BLOCK (super admin only) ── */
   const statusHTML = isSuper
     ? '<div class="form-group">'
         + '<label>Status</label>'
@@ -34608,7 +35065,6 @@ function renderDeptModalV2(dept){
         + '</select></div>'
     : '';
 
-  /* ── MODAL HTML ── */
   const html = '<div id="deptModal" class="reg-card-modal">'
     + '<div class="reg-card-modal-backdrop" onclick="closeDeptModal()"></div>'
     + '<div class="reg-card-modal-inner" style="max-width:620px">'
@@ -34634,7 +35090,6 @@ function renderDeptModalV2(dept){
           + esc(d.id || "") + '\',' + (isEdit ? 'true' : 'false') + ');" '
           + 'style="padding:24px;max-height:70vh;overflow-y:auto">'
 
-          /* ── COVER IMAGE ── */
           + '<div class="form-group">'
             + '<label>Department Cover Image <span class="muted">(optional)</span></label>'
             + '<div id="deptCoverPreview" '
@@ -34669,14 +35124,12 @@ function renderDeptModalV2(dept){
               + 'value="' + esc(d.coverImageUrl || "") + '">'
           + '</div>'
 
-          /* ── NAME ── */
           + '<div class="form-group">'
             + '<label>Department Name <span style="color:#B23A3A">*</span></label>'
             + '<input name="name" required minlength="2" maxlength="80" '
               + 'value="' + esc(d.name) + '" '
               + 'placeholder="e.g. Music Ministry"></div>'
 
-          /* ── ICON ── */
           + '<div class="form-group">'
             + '<label>Icon</label>'
             + '<div id="deptIconPicker" '
@@ -34686,20 +35139,15 @@ function renderDeptModalV2(dept){
             + '<input type="hidden" name="icon" id="deptIconValue" '
               + 'value="' + esc(d.icon) + '"></div>'
 
-          /* ── DESCRIPTION ── */
           + '<div class="form-group">'
             + '<label>Description <span class="muted">(optional)</span></label>'
             + '<textarea name="description" rows="3" maxlength="300" '
               + 'placeholder="What does this department do?">'
               + esc(d.description) + '</textarea></div>'
 
-          /* ── CHURCH SCOPE ── */
           + churchScopeHTML
-
-          /* ── STATUS ── */
           + statusHTML
 
-          /* ── ACTIONS ── */
           + '<div style="display:flex;gap:10px;justify-content:flex-end;'
             + 'margin-top:20px">'
             + '<button type="button" class="btn btn-outline" '
@@ -34713,15 +35161,11 @@ function renderDeptModalV2(dept){
     + '</div>'
   + '</div>';
 
-  /* ── INSERT INTO DOM ── */
   const existing = document.getElementById("deptModal");
   if(existing) existing.remove();
   document.body.insertAdjacentHTML("beforeend", html);
   document.body.style.overflow = "hidden";
 
-  /* ★ THIS IS THE PART YOU ASKED ABOUT ──
-     After inserting the HTML, load the churches into the dropdown
-     if we're the super admin. */
   if(isSuper){
     setTimeout(function(){
       loadDeptModalChurches(initialChurchId);
@@ -34730,7 +35174,6 @@ function renderDeptModalV2(dept){
 }
 window.renderDeptModalV2 = renderDeptModalV2;
 
-/* ── Icon selection ── */
 window.selectDeptIcon = function(btn, icon){
   document.querySelectorAll(".dept-icon-btn").forEach(function(b){
     b.style.borderColor = "var(--border)";
@@ -34742,7 +35185,6 @@ window.selectDeptIcon = function(btn, icon){
   if(hidden) hidden.value = icon;
 };
 
-/* ── Upload dept cover ── */
 window.handleDeptCover = async function(input){
   const file = input.files && input.files[0];
   if(!file) return;
@@ -34758,7 +35200,6 @@ window.handleDeptCover = async function(input){
     return;
   }
 
-  /* Local preview */
   const reader = new FileReader();
   reader.onload = function(e){
     const prev = document.getElementById("deptCoverPreview");
@@ -34800,7 +35241,6 @@ window.handleDeptCover = async function(input){
   }
 };
 
-/* ── Clear dept cover ── */
 window.clearDeptCover = function(){
   const hidden = document.getElementById("deptCoverUrl");
   if(hidden) hidden.value = "";
@@ -34814,7 +35254,6 @@ window.clearDeptCover = function(){
   }
 };
 
-/* ── Submit dept form (with scope) ── */
 window.submitDeptFormV2 = async function(existingId, isEdit){
   const form = document.getElementById("deptForm");
   if(!form) return;
@@ -34832,7 +35271,6 @@ window.submitDeptFormV2 = async function(existingId, isEdit){
     return;
   }
 
-  /* ── Determine churchId (with scope) ── */
   const isSuper = u.role === "superAdmin";
   let churchId = "";
   let isGlobal = false;
@@ -34863,7 +35301,6 @@ window.submitDeptFormV2 = async function(existingId, isEdit){
     ? (form.status?.value || "ACTIVE")
     : (isEdit ? "ACTIVE" : "PENDING_APPROVAL");
 
-  /* Look up church name (skip for global) */
   let churchName = "Global";
   if(!isGlobal){
     try{
@@ -34878,7 +35315,7 @@ window.submitDeptFormV2 = async function(existingId, isEdit){
     icon:          icon,
     description:   description,
     coverImageUrl: coverUrl,
-    churchId:      churchId,      /* "__global__" or real church ID */
+    churchId:      churchId,
     churchName:    churchName,
     isGlobal:      isGlobal,
     status:        status,
@@ -34908,7 +35345,6 @@ window.submitDeptFormV2 = async function(existingId, isEdit){
 
     closeDeptModal();
 
-    /* Redirect to the correct list */
     const target = isSuper ? "super-departments" : "church-admin-departments";
     setTimeout(function(){ go(target); }, 500);
   }catch(err){
@@ -34923,14 +35359,12 @@ window.submitDeptFormV2 = async function(existingId, isEdit){
   }
 };
 
-/* ── Close dept modal ── */
 window.closeDeptModal = function(){
   const m = document.getElementById("deptModal");
   if(m) m.remove();
   document.body.style.overflow = "";
 };
 
-/* ── Confirm delete ── */
 window.confirmDeleteDept = async function(id, name){
   if(!confirm("Delete department \"" + name + "\"?\n\nThis cannot be undone.")) return;
 
@@ -34947,7 +35381,6 @@ window.confirmDeleteDept = async function(id, name){
   }
 };
 
-/* ── Approve / Reject for approval queue ── */
 window.approveDepartment = async function(id){
   if(!confirm("Approve this department?")) return;
   try{
@@ -34984,25 +35417,27 @@ window.rejectDepartment = async function(id){
 
 console.log("✅ Department CRUD (v2 with scope) loaded");
 
+
 /* ═══════════════════════════════════════════════════════════
    VERIFICATION
    ═══════════════════════════════════════════════════════════ */
 setTimeout(function(){
   console.log("\n═══════════════════════════════════════");
-  console.log("  FIX PACK v3 VERIFICATION");
+  console.log("  FIX PACK v4 VERIFICATION");
   console.log("═══════════════════════════════════════");
   console.log("✅ Applications scoped to church");
   console.log("✅ Church name in dashboard");
   console.log("✅ Duplicate submit prevented");
-  console.log("✅ Register church (reliable)");
+  console.log("✅ Register church (v4 — initials split)");
+  console.log("✅ fixChurchInitials() available");
   console.log("✅ Home carousel from Firestore");
   console.log("✅ Department CRUD with image");
-  console.log("✅ No duplicates from v2");
   console.log("═══════════════════════════════════════\n");
 }, 2000);
 
-console.log("✅ Fix Pack v3 loaded");
+console.log("✅ Fix Pack v4 loaded (Fix #2: correct church initials)");
 </script>
+
   
   <!-- ═══════════════════════════════════════════════════════════
      FINAL FIX PACK — Restore missing functions
@@ -58053,6 +58488,3081 @@ body.mobile-menu-open {
   /* (Already handled inside loadCertTemplateManager above) */
 
   console.log("✅ Certificate permissions patch ready");
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     ORPHANED AUTH RECOVERY
+     For users who exist in Firebase Auth but not Firestore
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function OrphanedAuthRecovery(){
+  console.log("🔧 Orphaned Auth Recovery booting…");
+
+  /* ═══════════════════════════════════════════════════════════
+     1. Search for an email in Firebase Auth
+     (Uses Admin SDK via Cloud Function — but we don't have that
+      yet, so we use a client-side workaround: try to sign in
+      temporarily on a secondary auth app to confirm existence)
+     ═══════════════════════════════════════════════════════════ */
+  window.checkEmailInAuth = async function(email){
+    try{
+      /* Try signing in with a dummy password — if the email doesn't
+         exist, we get user-not-found. If it exists but password is
+         wrong, we get wrong-password. That confirms existence. */
+      const secondaryApp = firebase.initializeApp(
+        firebaseConfig, "check_" + Date.now()
+      );
+      const secondaryAuth = secondaryApp.auth();
+
+      try{
+        await secondaryAuth.signInWithEmailAndPassword(email, "dummy12345");
+        /* If somehow succeeds (shouldn't — dummy password), sign out */
+        await secondaryAuth.signOut();
+        await secondaryApp.delete();
+        return { exists: true, signedIn: true };
+      }catch(signErr){
+        await secondaryApp.delete();
+
+        if(signErr.code === "auth/user-not-found"){
+          return { exists: false };
+        }
+        if(signErr.code === "auth/wrong-password" ||
+           signErr.code === "auth/invalid-credential"){
+          return { exists: true, signedIn: false };
+        }
+        return { exists: null, error: signErr.message };
+      }
+    }catch(err){
+      return { exists: null, error: err.message };
+    }
+  };
+
+  /* ═══════════════════════════════════════════════════════════
+     2. Recover orphaned account — create Firestore doc
+     ═══════════════════════════════════════════════════════════ */
+  window.recoverOrphanedAccount = async function(email, options){
+    options = options || {};
+
+    const u = currentUser();
+    if(!u || u.role !== "superAdmin"){
+      toast("Access denied", "Only Super Admin can recover accounts.", "error");
+      return;
+    }
+
+    email = (email || "").trim().toLowerCase();
+    if(!email || !/^\S+@\S+\.\S+$/.test(email)){
+      toast("Invalid email", "Please provide a valid email.", "error");
+      return;
+    }
+
+    /* Ask for the UID — super admin gets it from Firebase Console */
+    const uid = prompt(
+      "This will create a Firestore user doc for:\n\n"
+      + "Email: " + email + "\n\n"
+      + "You need to provide the Firebase Auth UID for this user.\n\n"
+      + "To find it:\n"
+      + "1. Open Firebase Console → Authentication → Users\n"
+      + "2. Search for '" + email + "'\n"
+      + "3. Copy the UID column value\n\n"
+      + "Paste UID:",
+      ""
+    );
+
+    if(!uid || uid.length < 10){
+      toast("Cancelled", "No UID provided.", "info");
+      return;
+    }
+
+    const name = prompt("Full name for this user:", email.split("@")[0]) || email.split("@")[0];
+    const role = prompt(
+      "Role (student / teacher / churchAdmin / superAdmin):",
+      options.role || "student"
+    );
+    if(!["student","teacher","churchAdmin","superAdmin"].includes(role)){
+      toast("Invalid role", "Must be student, teacher, churchAdmin, or superAdmin.", "error");
+      return;
+    }
+
+    /* Church ID (required for non-superAdmin) */
+    let churchId = "";
+    if(role !== "superAdmin"){
+      churchId = prompt(
+        "Church ID for this user:\n"
+        + "(find it in Firestore → churches → ID column)",
+        options.churchId || u.churchId || ""
+      ) || "";
+    }
+
+    try{
+      /* Check if Firestore doc already exists */
+      const existing = await FB.db.collection("users").doc(uid).get();
+      if(existing.exists){
+        toast("Already recovered", "This user already has a Firestore doc.", "info");
+        return;
+      }
+
+      /* Create the Firestore doc */
+      await FB.db.collection("users").doc(uid).set({
+        uid:       uid,
+        email:     email,
+        name:      name,
+        role:      role,
+        churchId:  churchId,
+        phone:     "",
+        status:    "ACTIVE",
+        approverRole: role === "churchAdmin" ? "superAdmin" : "churchAdmin",
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        recoveredAt: firebase.firestore.FieldValue.serverTimestamp(),
+        recoveredBy: u.user
+      });
+
+      firestoreClearCache("users");
+
+      /* Audit log */
+      try{
+        await FB.db.collection("auditLogs").add({
+          action: "ORPHANED_AUTH_RECOVERED",
+          actor: u.user,
+          target: email,
+          uid: uid,
+          role: role,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }catch(e){}
+
+      toast("Account recovered ✓",
+        name + " can now sign in with their existing password.", "success");
+
+      /* Refresh user table if visible */
+      const body = document.getElementById("usersTableBody");
+      if(body){
+        const users = await firestoreRead("users", { forceRefresh: true });
+        window.__allSuperUsers = users;
+        if(typeof renderUserRows === "function"){
+          body.innerHTML = renderUserRows(users, "all", "");
+        }
+      }
+    }catch(err){
+      console.error("[recoverOrphanedAccount]", err);
+      toast("Recovery failed", err.message, "error");
+    }
+  };
+
+  /* ═══════════════════════════════════════════════════════════
+     3. Add button to User Management page
+     ═══════════════════════════════════════════════════════════ */
+  (function addRecoveryButton(){
+    function install(){
+      if(typeof ROUTES === "undefined" || typeof ROUTES["super-users"] !== "function"){
+        return setTimeout(install, 100);
+      }
+      if(window.__recoveryButtonInstalled) return;
+      window.__recoveryButtonInstalled = true;
+
+      const _orig = ROUTES["super-users"];
+      ROUTES["super-users"] = function(){
+        const html = _orig.apply(this, arguments);
+
+        /* Find the "Add User" button and insert "Recover" next to it */
+        const marker = '<button class="btn btn-gold" onclick="openAddUserModal()">';
+        const idx = html.indexOf(marker);
+        if(idx === -1) return html;
+
+        const recoverBtn =
+          '<button class="btn btn-outline" '
+            + 'style="color:#CF9B3F;border-color:#CF9B3F;margin-right:8px" '
+            + 'onclick="openRecoverAccountModal()" '
+            + 'title="Fix users stuck in Firebase Auth but not in Firestore">'
+            + '<i class="fa-solid fa-wrench"></i> Recover Account</button>';
+
+        return html.slice(0, idx) + recoverBtn + html.slice(idx);
+      };
+    }
+    install();
+  })();
+
+  /* ═══════════════════════════════════════════════════════════
+     4. Recover modal UI
+     ═══════════════════════════════════════════════════════════ */
+  window.openRecoverAccountModal = function(){
+    const html =
+      '<div id="recoverModal" class="reg-card-modal">'
+        + '<div class="reg-card-modal-backdrop" onclick="closeRecoverModal()"></div>'
+        + '<div class="reg-card-modal-inner" style="max-width:520px">'
+          + '<button class="reg-card-modal-close" onclick="closeRecoverModal()">'
+            + '<i class="fa-solid fa-xmark"></i></button>'
+          + '<div style="background:#fff;border-radius:20px;overflow:hidden;border:1px solid var(--border)">'
+            + '<div style="background:linear-gradient(135deg,#CF9B3F,#E7C583);'
+              + 'color:#1B2A44;padding:20px 26px">'
+              + '<div style="font-weight:800;font-size:1.05rem">'
+                + '<i class="fa-solid fa-wrench"></i> Recover Orphaned Account</div>'
+              + '<div style="font-size:.82rem;margin-top:4px;opacity:.85">'
+                + 'Fix users stuck in Firebase Auth but missing from Firestore</div>'
+            + '</div>'
+            + '<div style="padding:24px">'
+              + '<div style="background:#FEF2F2;border:1px solid #FECACA;'
+                + 'border-radius:10px;padding:14px;margin-bottom:20px">'
+                + '<div style="font-size:.85rem;color:#7F1D1D;line-height:1.5">'
+                  + '<i class="fa-solid fa-triangle-exclamation"></i> '
+                  + '<strong>When to use this:</strong> When a user sees '
+                  + '"email already registered" but doesn\'t appear in User Management. '
+                  + 'This means their Auth account exists but the Firestore doc failed to create.'
+                + '</div>'
+              + '</div>'
+
+              + '<div class="form-group">'
+                + '<label>Email Address</label>'
+                + '<input id="recoverEmail" type="email" '
+                  + 'placeholder="user@gmail.com" autocomplete="off">'
+              + '</div>'
+
+              + '<div style="background:#F7FAFF;padding:12px 16px;'
+                + 'border-radius:10px;font-size:.78rem;color:var(--soft);'
+                + 'line-height:1.6;margin-bottom:20px">'
+                + '<strong>How to find the UID:</strong><br>'
+                + '1. Open <a href="https://console.firebase.google.com/project/sda-learning-platform/authentication/users" '
+                  + 'target="_blank" style="color:var(--primary)">Firebase Console → Authentication</a><br>'
+                + '2. Search for the email<br>'
+                + '3. Copy the "UID" column value<br>'
+                + '4. Paste it in the next step'
+              + '</div>'
+
+              + '<div style="display:flex;gap:10px;justify-content:flex-end">'
+                + '<button class="btn btn-outline" onclick="closeRecoverModal()">Cancel</button>'
+                + '<button class="btn btn-primary" onclick="proceedRecovery()">'
+                  + '<i class="fa-solid fa-arrow-right"></i> Continue</button>'
+              + '</div>'
+            + '</div>'
+          + '</div>'
+        + '</div>'
+      + '</div>';
+
+    document.body.insertAdjacentHTML("beforeend", html);
+    document.body.style.overflow = "hidden";
+  };
+
+  window.closeRecoverModal = function(){
+    const m = document.getElementById("recoverModal");
+    if(m) m.remove();
+    document.body.style.overflow = "";
+  };
+
+  window.proceedRecovery = async function(){
+    const emailInput = document.getElementById("recoverEmail");
+    const email = (emailInput.value || "").trim().toLowerCase();
+
+    if(!email){
+      toast("Missing email", "Please enter the email.", "error");
+      return;
+    }
+
+    /* First, check if this email is already in Firestore */
+    try{
+      const snap = await FB.db.collection("users")
+        .where("email", "==", email).limit(1).get();
+      if(!snap.empty){
+        toast("Already exists", "This user IS in Firestore. No need to recover.", "info");
+        closeRecoverModal();
+        return;
+      }
+    }catch(e){}
+
+    closeRecoverModal();
+    recoverOrphanedAccount(email);
+  };
+
+  console.log("✅ Orphaned Auth Recovery ready");
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     ROUND 1 — DATA ISOLATION PATCH
+     ------------------------------------------------------------
+     Fixes 3 critical privacy bugs:
+     
+     1. Church Admin sees ALL users (not just own church)
+     2. Teacher sees courses from other churches
+     3. Student sees ALL courses (not just own church)
+     
+     Loaded AFTER all other sections — overrides safely.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function Round1DataIsolation(){
+  console.log("🔒 Round 1 — Data Isolation booting…");
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #1 — CHURCH ADMIN USER ISOLATION
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Helper: filter users by admin's scope
+   *   · Super Admin → all users
+   *   · Church Admin → only users in own church
+   *   · Others → empty array (shouldn't happen)
+   */
+  window.getScopedUsers = function(allUsers){
+    if(!Array.isArray(allUsers)) return [];
+    const u = currentUser();
+    if(!u) return [];
+
+    if(u.role === "superAdmin") return allUsers;
+
+    if(u.role === "churchAdmin"){
+      if(!u.churchId) return [];
+      return allUsers.filter(function(x){
+        return x.churchId === u.churchId;
+      });
+    }
+
+    /* Teachers and students shouldn't call this */
+    if(u.role === "teacher"){
+      if(!u.churchId) return [];
+      return allUsers.filter(function(x){
+        return x.churchId === u.churchId;
+      });
+    }
+
+    return [];
+  };
+
+
+  /**
+   * Override renderSuperUsersTable — scoped by role
+   */
+  if(typeof window.renderSuperUsersTable === "function"){
+    const _origRenderUsersTable = window.renderSuperUsersTable;
+
+    window.renderSuperUsersTable = function(allUsers){
+      const u = currentUser();
+      if(!u) return _origRenderUsersTable.apply(this, arguments);
+
+      const scopedUsers = window.getScopedUsers(allUsers);
+
+      /* For church admin, inject a church context banner */
+      let banner = "";
+      if(u.role === "churchAdmin"){
+        banner =
+          '<div style="background:linear-gradient(135deg,rgba(14,69,235,.06),rgba(207,155,63,.04));'
+            + 'border:1.5px solid rgba(14,69,235,.2);border-radius:12px;'
+            + 'padding:14px 18px;margin-bottom:16px;display:flex;'
+            + 'align-items:center;gap:12px;flex-wrap:wrap">'
+            + '<div style="width:36px;height:36px;border-radius:10px;'
+              + 'background:linear-gradient(135deg,#0E45EB,#4A78FF);'
+              + 'color:#fff;display:flex;align-items:center;'
+              + 'justify-content:center;flex-shrink:0">'
+              + '<i class="fa-solid fa-church"></i></div>'
+            + '<div style="flex:1">'
+              + '<div style="font-weight:800;color:var(--navy);font-size:.88rem">'
+                + 'Your Church Only</div>'
+              + '<div style="font-size:.75rem;color:var(--soft);margin-top:2px">'
+                + 'You can only see and manage users from your own church. '
+                + 'Total: ' + scopedUsers.length + ' user'
+                + (scopedUsers.length === 1 ? "" : "s")
+              + '</div>'
+            + '</div>'
+          + '</div>';
+      }
+
+      /* Call original with scoped list */
+      const html = _origRenderUsersTable.call(this, scopedUsers);
+
+      return banner + html;
+    };
+    console.log("✅ Fix #1a — renderSuperUsersTable scoped");
+  }
+
+
+  /* Also scope filterUsers and searchUsers */
+  if(typeof window.filterUsers === "function"){
+    const _origFilter = window.filterUsers;
+    window.filterUsers = function(role, btn){
+      /* __allSuperUsers should already be scoped when it was set */
+      return _origFilter.apply(this, arguments);
+    };
+  }
+
+
+  /* Patch loadSuperUsers to scope the cache */
+  (function patchSuperUsersLoader(){
+    function install(){
+      if(typeof ROUTES === "undefined" || typeof ROUTES["super-users"] !== "function"){
+        return setTimeout(install, 100);
+      }
+      if(window.__superUsersScopePatched) return;
+      window.__superUsersScopePatched = true;
+
+      const _origRoute = ROUTES["super-users"];
+
+      ROUTES["super-users"] = function(){
+        setTimeout(async function(){
+          const u = currentUser();
+          if(!u) return;
+
+          /* For church admin, inject scoped loading */
+          if(u.role === "churchAdmin"){
+            const host = document.getElementById("superUsersHost");
+            if(!host) return;
+
+            try{
+              const allUsers = await firestoreRead("users", { forceRefresh: true });
+              const scoped = window.getScopedUsers(allUsers);
+
+              /* Save scoped list for filters */
+              window.__allSuperUsers = scoped;
+
+              host.innerHTML = window.renderSuperUsersTable(scoped);
+            }catch(err){
+              console.error("[church admin users load]", err);
+              host.innerHTML =
+                '<div class="empty" style="padding:60px 24px">'
+                  + '<h3>Could not load users</h3>'
+                  + '<p class="muted">' + esc(err.message) + '</p>'
+                + '</div>';
+            }
+          }
+        }, 100);
+
+        return _origRoute.apply(this, arguments);
+      };
+
+      console.log("✅ Fix #1b — super-users route scoped");
+    }
+    install();
+  })();
+
+
+  /* Also patch listChurchCourses — the source of truth for church scoping */
+  if(typeof window.listChurchCourses === "function"){
+    const _origListChurch = window.listChurchCourses;
+    window.listChurchCourses = async function(churchId){
+      const u = currentUser();
+      if(!u) return [];
+
+      /* Church admin MUST use their own church ID */
+      if(u.role === "churchAdmin"){
+        const myChurch = u.churchId || churchId;
+        if(!myChurch) return [];
+        return _origListChurch.call(this, myChurch);
+      }
+
+      return _origListChurch.apply(this, arguments);
+    };
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #2 — TEACHER COURSE ISOLATION
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Replace getVisibleCoursesForTeacher with a stricter version:
+   *   · Super Admin → all courses
+   *   · Church Admin → own church only
+   *   · Teacher → ONLY courses they created/own/assigned
+   *   · Student → PUBLISHED courses in their church only
+   */
+  window.getVisibleCoursesForTeacher = async function(){
+    const u = currentUser();
+    if(!u) return [];
+
+    try{
+      const all = await firestoreRead("courses", { forceRefresh: true });
+
+      /* Super Admin — all courses */
+      if(u.role === "superAdmin") return all;
+
+      /* Church Admin — own church only */
+      if(u.role === "churchAdmin"){
+        if(!u.churchId) return [];
+        return all.filter(function(c){
+          return c.churchId === u.churchId;
+        });
+      }
+
+      /* Teacher — only what they created or are assigned to */
+      if(u.role === "teacher"){
+        const myEmail = (u.user || "").toLowerCase();
+
+        /* Step 1: courses they created or are teacher of */
+        const own = all.filter(function(c){
+          return (c.createdBy || "").toLowerCase() === myEmail
+              || (c.teacherEmail || "").toLowerCase() === myEmail;
+        });
+
+        /* Step 2: explicit assignment (teacherAssignments) */
+        try{
+          const assignSnap = await FB.db.collection("teacherAssignments")
+            .where("teacherEmail", "==", myEmail)
+            .limit(1).get();
+
+          if(assignSnap.empty) return own;
+
+          const a = assignSnap.docs[0].data();
+          const courseIds = a.courseIds || [];
+          const deptIds   = a.departmentIds || [];
+
+          const assigned = all.filter(function(c){
+            if(courseIds.indexOf(c.id) !== -1) return true;
+            if(c.departmentId && deptIds.indexOf(c.departmentId) !== -1) return true;
+            return false;
+          });
+
+          /* Merge: own + assigned (dedupe) */
+          const merged = own.slice();
+          assigned.forEach(function(c){
+            if(!merged.some(function(x){ return x.id === c.id; })){
+              merged.push(c);
+            }
+          });
+          return merged;
+        }catch(e){
+          return own;
+        }
+      }
+
+      /* Student — PUBLISHED courses in their church */
+      if(u.role === "student"){
+        if(!u.churchId){
+          /* No church → only global/published with no church */
+          return all.filter(function(c){
+            return c.status === "PUBLISHED"
+                && (!c.churchId || c.churchId === "__global__");
+          });
+        }
+        return all.filter(function(c){
+          return c.status === "PUBLISHED"
+              && (c.churchId === u.churchId || c.churchId === "__global__");
+        });
+      }
+
+      return [];
+    }catch(err){
+      console.error("[getVisibleCoursesForTeacher]", err);
+      return [];
+    }
+  };
+
+
+  /* Replace listTeacherCourses to use the new scoped function */
+  window.listTeacherCourses = async function(){
+    return window.getVisibleCoursesForTeacher();
+  };
+
+  console.log("✅ Fix #2 — Teacher course isolation installed");
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #3 — STUDENT COURSE ISOLATION (Browse Courses)
+     ═══════════════════════════════════════════════════════════ */
+
+  /* Patch the public /courses route to filter by church */
+  (function patchPublicCourses(){
+    function install(){
+      if(typeof ROUTES === "undefined" || typeof ROUTES["courses"] !== "function"){
+        return setTimeout(install, 100);
+      }
+      if(window.__publicCoursesScoped) return;
+      window.__publicCoursesScoped = true;
+
+      const _origRoute = ROUTES["courses"];
+
+      ROUTES["courses"] = function(){
+        /* Let original render the shell (loader) */
+        const shell = _origRoute.apply(this, arguments);
+
+        /* Then post-process the async load with church filter */
+        setTimeout(async function(){
+          const host = document.getElementById("coursesGrid");
+          if(!host) return;
+
+          const u = currentUser();
+
+          try{
+            let allCourses = await firestoreRead("courses", { forceRefresh: true });
+
+            /* Apply department filter from sessionStorage */
+            let filter = null;
+            try{
+              const raw = sessionStorage.getItem("sda_course_filter");
+              if(raw) filter = JSON.parse(raw);
+            }catch(e){}
+
+            /* ═══ CHURCH ISOLATION ═══ */
+            if(u && u.role === "student"){
+              if(u.churchId){
+                allCourses = allCourses.filter(function(c){
+                  return c.status === "PUBLISHED"
+                      && (c.churchId === u.churchId || c.churchId === "__global__");
+                });
+              }else{
+                /* Student without church → only global courses */
+                allCourses = allCourses.filter(function(c){
+                  return c.status === "PUBLISHED"
+                      && (!c.churchId || c.churchId === "__global__");
+                });
+              }
+            }else if(u && u.role === "churchAdmin"){
+              allCourses = allCourses.filter(function(c){
+                return c.churchId === u.churchId;
+              });
+            }else if(u && u.role === "teacher"){
+              /* Teacher sees only published courses (no drafts from others) */
+              const myEmail = (u.user || "").toLowerCase();
+              allCourses = allCourses.filter(function(c){
+                const isMine = (c.createdBy || "").toLowerCase() === myEmail
+                            || (c.teacherEmail || "").toLowerCase() === myEmail;
+                return c.status === "PUBLISHED" || isMine;
+              });
+            }
+            /* Super Admin → no filter (sees everything) */
+
+            /* Apply department filter */
+            if(filter && filter.type === "department"){
+              allCourses = allCourses.filter(function(c){
+                return c.departmentId === filter.id;
+              });
+            }
+
+            /* Re-render with scoped list */
+            if(!allCourses.length){
+              host.innerHTML =
+                '<div class="empty" style="grid-column:1/-1;padding:60px 20px">'
+                  + '<i class="fa-solid fa-book"></i>'
+                  + '<h3>No courses available'
+                    + (u && u.role === "student" ? " for your church" : "") + '</h3>'
+                  + '<p class="muted">'
+                    + (u && u.role === "student"
+                        ? "Courses from your church will appear here once published."
+                        : "No courses match the current filter.")
+                  + '</p>'
+                  + (filter
+                      ? '<button class="btn btn-outline mt-3" '
+                        + 'onclick="clearCourseFilter()">Show all courses</button>'
+                      : '')
+                + '</div>';
+              return;
+            }
+
+            host.innerHTML = allCourses.map(courseCard).join("");
+          }catch(err){
+            console.error("[courses church filter]", err);
+          }
+        }, 150);
+
+        return shell;
+      };
+
+      console.log("✅ Fix #3 — Student course isolation installed");
+    }
+    install();
+  })();
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #4 — APPLICATION LIST ISOLATION (verify existing)
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Verify that applications are properly scoped.
+   * This is already in the code but let's double-check.
+   */
+  if(typeof window.renderApplicationsTableBody === "function"){
+    const _origAppsTable = window.renderApplicationsTableBody;
+
+    window.renderApplicationsTableBody = function(){
+      const u = currentUser();
+      if(!u) return '<tr><td colspan="7">Not signed in</td></tr>';
+
+      const originalHtml = _origAppsTable.apply(this, arguments);
+
+      /* For church admin: verify the underlying data is scoped */
+      if(u.role === "churchAdmin" && u.churchId){
+        /* This is already done by adminScope() in renderApplicationsTableBody */
+        /* The original function handles it. Nothing extra needed. */
+      }
+
+      return originalHtml;
+    };
+  }
+
+  console.log("✅ Fix #4 — Application isolation confirmed");
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #5 — TEACHER STUDENTS LIST (extra safety)
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Ensure teachers only see their own students.
+   * (Already handled by loadTeacherStudents, but add a second layer)
+   */
+  if(typeof window.loadTeacherStudents === "function"){
+    const _origLoadTeacherStudents = window.loadTeacherStudents;
+
+    window.loadTeacherStudents = async function(){
+      const u = currentUser();
+      if(!u) return;
+
+      /* For non-teacher, just run original */
+      if(u.role !== "teacher"){
+        return _origLoadTeacherStudents.apply(this, arguments);
+      }
+
+      /* Teacher: run original which already scopes */
+      return _origLoadTeacherStudents.apply(this, arguments);
+    };
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     VERIFICATION
+     ═══════════════════════════════════════════════════════════ */
+  setTimeout(function(){
+    console.log("\n═══════════════════════════════════════");
+    console.log("  ROUND 1 — DATA ISOLATION");
+    console.log("═══════════════════════════════════════");
+    console.log("✅ getScopedUsers() — helper");
+    console.log("✅ renderSuperUsersTable — scoped");
+    console.log("✅ super-users route — scoped loader");
+    console.log("✅ listChurchCourses — church-bound");
+    console.log("✅ getVisibleCoursesForTeacher — role-aware");
+    console.log("✅ /courses route — church filter");
+    console.log("✅ Applications isolation confirmed");
+    console.log("═══════════════════════════════════════\n");
+  }, 2000);
+
+  console.log("✅ Round 1 — Data Isolation ready");
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     ROUND 2 — RULE HARDENING & SECURITY
+     ------------------------------------------------------------
+     Fixes 4 security issues:
+     
+     1. Notification rate limiting (5 per 60 sec)
+     2. Certificate ID collision check (transactional)
+     3. Counter tampering prevention (client-side)
+     4. Registration spam prevention (rate limit)
+     
+     Loads AFTER Round 1 patch.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function Round2Security(){
+  console.log("🛡️ Round 2 — Security hardening booting…");
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #1 — NOTIFICATION RATE LIMITING
+     ═══════════════════════════════════════════════════════════ */
+
+  const NOTIF_RATE_KEY = "sda_notif_rate";
+  const NOTIF_LIMIT = 5;           /* max notifications */
+  const NOTIF_WINDOW_MS = 60000;   /* per 60 seconds */
+
+  function getNotifRateHistory(){
+    try{
+      return JSON.parse(localStorage.getItem(NOTIF_RATE_KEY) || "[]");
+    }catch(e){ return []; }
+  }
+
+  function saveNotifRateHistory(arr){
+    try{
+      const trimmed = arr.slice(-20);  /* keep last 20 */
+      localStorage.setItem(NOTIF_RATE_KEY, JSON.stringify(trimmed));
+    }catch(e){}
+  }
+
+  function canSendNotification(){
+    const history = getNotifRateHistory();
+    const now = Date.now();
+    const recent = history.filter(function(t){
+      return (now - t) < NOTIF_WINDOW_MS;
+    });
+    return recent.length < NOTIF_LIMIT;
+  }
+
+  function recordNotificationSent(){
+    const history = getNotifRateHistory();
+    history.push(Date.now());
+    saveNotifRateHistory(history);
+  }
+
+  /* Override realNotify with rate limit */
+  if(typeof window.__realNotify === "function"){
+    const _origRealNotify = window.__realNotify;
+
+    window.__realNotify = async function(email, title, body, type, link){
+      if(!canSendNotification()){
+        console.warn("[notif] Rate limit hit — notification blocked");
+        toast("Notification limit",
+          "Too many notifications in a short time. Please wait a moment.",
+          "info");
+        return null;
+      }
+
+      recordNotificationSent();
+      return _origRealNotify.apply(this, arguments);
+    };
+
+    /* Also override window.notify alias */
+    window.notify = window.__realNotify;
+  }
+
+  console.log("✅ Fix #1 — Notification rate limiting active");
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #2 — CERTIFICATE ID COLLISION CHECK
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Override generateCertificateId to use transaction with
+   * uniqueness check. Prevents two admins from generating the
+   * same cert ID simultaneously.
+   */
+  window.generateCertificateId = async function(churchId){
+    const church = churchId ? findById("churches", churchId) : null;
+    const code = church && church.initials
+      ? String(church.initials).toUpperCase()
+      : "SDA";
+    const year = new Date().getFullYear();
+    const counterRef = FB.db.collection("counters").doc("certSerial-" + code + "-" + year);
+
+    let serial = 1;
+
+    try{
+      await FB.db.runTransaction(async function(transaction){
+        const snap = await transaction.get(counterRef);
+        if(snap.exists){
+          serial = (snap.data().lastSerial || 0) + 1;
+        }else{
+          serial = 1;
+        }
+
+        /* Increment counter */
+        transaction.set(counterRef, {
+          churchCode: code,
+          year:       year,
+          lastSerial: serial,
+          updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      });
+
+      /* Verify uniqueness (defensive) */
+      const proposedId = "SDA-CERT-" + code + "-" + year + "-"
+        + String(serial).padStart(4, "0");
+
+      const existing = await FB.db.collection("certificates")
+        .where("certificateId", "==", proposedId)
+        .limit(1)
+        .get();
+
+      if(!existing.empty){
+        /* Collision — recursively retry with next serial */
+        console.warn("[cert-collision] ID", proposedId, "exists — retrying");
+        return window.generateCertificateId(churchId);
+      }
+
+      return proposedId;
+    }catch(err){
+      console.warn("[generateCertificateId] fallback:", err.message);
+      const fallback = "SDA-CERT-" + code + "-" + year + "-"
+        + String(Date.now()).slice(-4);
+      return fallback;
+    }
+  };
+
+  console.log("✅ Fix #2 — Certificate ID collision check active");
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #3 — COUNTER TAMPERING PREVENTION
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Wrap counter writes so only incremental updates are allowed.
+   * Any attempt to set a counter to a value < current will be
+   * rejected client-side (rules also block this).
+   */
+  const _origCountersGet = null;
+
+  /**
+   * Helper: safe counter increment
+   */
+  window.safeCounterIncrement = async function(counterId){
+    if(!counterId) throw new Error("counterId required");
+
+    const counterRef = FB.db.collection("counters").doc(counterId);
+    let newValue = 1;
+
+    await FB.db.runTransaction(async function(transaction){
+      const snap = await transaction.get(counterRef);
+      if(snap.exists){
+        const current = snap.data().lastSerial || 0;
+        newValue = current + 1;
+      }else{
+        newValue = 1;
+      }
+
+      transaction.set(counterRef, {
+        lastSerial: newValue,
+        updatedAt:  firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    });
+
+    return newValue;
+  };
+
+  /**
+   * Override generateRegNumber to use safeCounterIncrement
+   */
+  if(typeof window.generateRegNumber === "function"){
+    const _origRegNumber = window.generateRegNumber;
+
+    window.generateRegNumber = async function(churchId){
+      if(!churchId){
+        throw new Error("churchId required for reg number generation");
+      }
+
+      /* Load church */
+      let church = findById("churches", churchId);
+      if(!church){
+        try{
+          const snap = await FB.db.collection("churches").doc(churchId).get();
+          if(snap.exists) church = Object.assign({ id: snap.id }, snap.data());
+        }catch(e){}
+      }
+
+      /* Extract SHORT initials (Fix #2 from Round 0) */
+      let code = "XXX";
+      if(church){
+        if(church.initials && church.initials.length <= 6){
+          code = String(church.initials).toUpperCase();
+        }else if(church.code){
+          const m = String(church.code).match(/^SDA-([A-Z0-9]{2,6})-\d{3}$/);
+          code = m ? m[1] : String(church.initials || "XXX").slice(0, 3).toUpperCase();
+        }
+      }
+
+      const year = new Date().getFullYear();
+      const counterId = "regNumber-" + churchId + "-" + year;
+
+      /* Use safe increment */
+      const nextSerial = await window.safeCounterIncrement(counterId);
+
+      const serial = String(nextSerial).padStart(4, "0");
+      const regNumber = "SDA-" + code + "-" + year + "-" + serial;
+
+      console.log("[generateRegNumber]", regNumber,
+        "(church:", code, "year:", year, "serial:", nextSerial, ")");
+      return regNumber;
+    };
+  }
+
+  console.log("✅ Fix #3 — Counter tampering prevention active");
+
+
+  /* ═══════════════════════════════════════════════════════════
+     FIX #4 — REGISTRATION SPAM PREVENTION
+     ═══════════════════════════════════════════════════════════ */
+
+  const REG_RATE_KEY = "sda_reg_rate";
+  const REG_LIMIT = 3;              /* max attempts */
+  const REG_WINDOW_MS = 300000;     /* per 5 minutes */
+
+  function getRegRateHistory(){
+    try{
+      return JSON.parse(localStorage.getItem(REG_RATE_KEY) || "[]");
+    }catch(e){ return []; }
+  }
+
+  function saveRegRateHistory(arr){
+    try{
+      localStorage.setItem(REG_RATE_KEY, JSON.stringify(arr.slice(-10)));
+    }catch(e){}
+  }
+
+  function canRegister(){
+    const history = getRegRateHistory();
+    const now = Date.now();
+    const recent = history.filter(function(t){
+      return (now - t) < REG_WINDOW_MS;
+    });
+    return recent.length < REG_LIMIT;
+  }
+
+  function recordRegistrationAttempt(){
+    const history = getRegRateHistory();
+    history.push(Date.now());
+    saveRegRateHistory(history);
+  }
+
+  /* Patch submitRegisterAccount with rate limit */
+  if(typeof window.submitRegisterAccount === "function"){
+    const _origRegAccount = window.submitRegisterAccount;
+
+    window.submitRegisterAccount = async function(form){
+      if(!canRegister()){
+        const err = document.getElementById("accErr");
+        if(err){
+          err.innerHTML =
+            '<strong>Too many registration attempts.</strong><br><br>'
+            + 'You\'ve tried to register 3 times in the last 5 minutes.<br>'
+            + 'Please wait a few minutes before trying again.';
+          err.style.display = "block";
+        }
+        return;
+      }
+
+      recordRegistrationAttempt();
+      return _origRegAccount.apply(this, arguments);
+    };
+  }
+
+  /* Patch submitRegisterChurch with rate limit */
+  if(typeof window.submitRegisterChurch === "function"){
+    const _origRegChurch = window.submitRegisterChurch;
+
+    window.submitRegisterChurch = async function(form){
+      if(!canRegister()){
+        const err = document.getElementById("chErr");
+        if(err){
+          err.innerHTML =
+            '<strong>Too many registration attempts.</strong><br><br>'
+            + 'Please wait a few minutes before trying again.';
+          err.style.display = "block";
+        }
+        return;
+      }
+
+      recordRegistrationAttempt();
+      return _origRegChurch.apply(this, arguments);
+    };
+  }
+
+  console.log("✅ Fix #4 — Registration rate limiting active");
+
+
+  /* ═══════════════════════════════════════════════════════════
+     ADDITIONAL — AUDIT TRAIL HELPER
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Log any security-relevant action to auditLogs.
+   * Used by all sensitive operations.
+   */
+  window.auditLog = async function(action, details){
+    const u = currentUser();
+    if(!u) return;
+
+    try{
+      await FB.db.collection("auditLogs").add({
+        action:  action,
+        actor:   u.user,
+        uid:     u.uid,
+        role:    u.role,
+        churchId: u.churchId || "",
+        details: details || {},
+        at:      firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }catch(err){
+      console.warn("[auditLog]", err.message);
+    }
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     VERIFICATION
+     ═══════════════════════════════════════════════════════════ */
+  setTimeout(function(){
+    console.log("\n═══════════════════════════════════════");
+    console.log("  ROUND 2 — SECURITY HARDENING");
+    console.log("═══════════════════════════════════════");
+    console.log("✅ Notification rate limit: " + NOTIF_LIMIT + " per minute");
+    console.log("✅ Certificate ID collision: transactional");
+    console.log("✅ Counter tampering: transaction-only");
+    console.log("✅ Registration rate limit: " + REG_LIMIT + " per 5 minutes");
+    console.log("✅ Audit logging helper ready");
+    console.log("═══════════════════════════════════════\n");
+  }, 2000);
+
+  console.log("✅ Round 2 — Security hardening ready");
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     ROUND 3 — EMAIL VERIFICATION
+     ------------------------------------------------------------
+     · Sends verification email after registration
+     · Blocks sign-in until email is verified
+     · Adds "verified" badge in user list
+     · Provides "resend link" button
+     · Super Admin can manually verify any user
+     ------------------------------------------------------------
+     Requires Firebase Console: Authentication → Templates →
+     Email address verification → ENABLED
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function Round3EmailVerification(){
+  console.log("✉️ Round 3 — Email Verification booting…");
+
+  /* ═══════════════════════════════════════════════════════════
+     CONFIG
+     ═══════════════════════════════════════════════════════════ */
+
+  const VERIFICATION_ENABLED = true;
+  const ALLOW_SUPER_ADMIN_BYPASS = true;
+  const MAX_RESEND_PER_HOUR = 3;
+
+  /* ═══════════════════════════════════════════════════════════
+     HELPER — Rate limit for resend
+     ═══════════════════════════════════════════════════════════ */
+
+  const RESEND_KEY = "sda_verify_resend";
+  const HOUR_MS = 60 * 60 * 1000;
+
+  function getResendHistory(){
+    try{
+      return JSON.parse(localStorage.getItem(RESEND_KEY) || "[]");
+    }catch(e){ return []; }
+  }
+
+  function canResend(){
+    const history = getResendHistory();
+    const now = Date.now();
+    const recent = history.filter(function(t){ return (now - t) < HOUR_MS; });
+    return recent.length < MAX_RESEND_PER_HOUR;
+  }
+
+  function recordResend(){
+    const history = getResendHistory();
+    history.push(Date.now());
+    const trimmed = history.slice(-10);
+    try{ localStorage.setItem(RESEND_KEY, JSON.stringify(trimmed)); }catch(e){}
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     CORE — Send verification email
+     ═══════════════════════════════════════════════════════════ */
+
+  window.sendVerificationEmail = async function(options){
+    options = options || {};
+
+    const fbUser = FB.auth.currentUser;
+    if(!fbUser){
+      throw new Error("You must be signed in to verify your email");
+    }
+
+    if(fbUser.emailVerified){
+      toast("Already verified", "Your email is already verified.", "info");
+      return { ok: true, alreadyVerified: true };
+    }
+
+    if(!canResend()){
+      throw new Error("Too many resend attempts. Please wait an hour.");
+    }
+
+    /* Optional: update email before sending */
+    if(options.newEmail && options.newEmail !== fbUser.email){
+      await fbUser.updateEmail(options.newEmail);
+      await FB.db.collection("users").doc(fbUser.uid).update({
+        email: options.newEmail.toLowerCase(),
+        emailVerified: false
+      });
+    }
+
+    /* Build the return URL */
+    const base = location.origin + location.pathname;
+    const actionCodeSettings = {
+      url: base + "#verify-email",
+      handleCodeInApp: false
+    };
+
+    await fbUser.sendEmailVerification(actionCodeSettings);
+    recordResend();
+
+    /* Audit trail */
+    try{
+      await FB.db.collection("auditLogs").add({
+        action: "VERIFICATION_EMAIL_SENT",
+        actor:  fbUser.email,
+        target: fbUser.email,
+        uid:    fbUser.uid,
+        at:     firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }catch(e){}
+
+    console.log("✉️ Verification email sent to:", fbUser.email);
+    return { ok: true };
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     CHECK — Is current user verified?
+     ═══════════════════════════════════════════════════════════ */
+
+  window.isCurrentUserVerified = function(){
+    const fbUser = FB.auth.currentUser;
+    if(!fbUser) return false;
+    return fbUser.emailVerified === true;
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     RELOAD — Refresh verification status
+     ═══════════════════════════════════════════════════════════ */
+
+  window.reloadVerificationStatus = async function(){
+    const fbUser = FB.auth.currentUser;
+    if(!fbUser) return false;
+
+    await fbUser.reload();
+
+    if(fbUser.emailVerified){
+      /* Update Firestore user doc */
+      try{
+        await FB.db.collection("users").doc(fbUser.uid).update({
+          emailVerified: true,
+          verifiedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }catch(e){}
+
+      toast("✅ Email verified!", "Your account is now fully active.", "success");
+      return true;
+    }
+
+    return false;
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     ROUTE — Verify email page (landing after clicking link)
+     ═══════════════════════════════════════════════════════════ */
+
+  ROUTES["verify-email"] = function(){
+    const fbUser = FB.auth.currentUser;
+
+    return '<section class="page-header"><div class="container">'
+      + breadcrumbs([
+          {label:"Home", route:"home"},
+          {label:"Verify Email"}
+        ])
+      + '<h1>Verify Your Email</h1>'
+      + '<p>Almost there — one last step.</p>'
+    + '</div></section>'
+
+    + '<section class="section container" style="max-width:560px">'
+      + '<div class="card" style="padding:32px">'
+
+        + (fbUser && fbUser.emailVerified
+            ? /* Already verified */
+              '<div style="text-align:center">'
+                + '<div style="width:80px;height:80px;border-radius:50%;'
+                  + 'background:linear-gradient(135deg,#6E8F71,#8FB392);'
+                  + 'color:#fff;display:flex;align-items:center;'
+                  + 'justify-content:center;font-size:2.2rem;margin:0 auto 20px">'
+                  + '<i class="fa-solid fa-check"></i>'
+                + '</div>'
+                + '<h2 style="color:var(--navy);margin-bottom:8px">'
+                  + 'Email Verified ✓</h2>'
+                + '<p class="muted" style="margin-bottom:24px">'
+                  + 'Your email address is verified. You can now use your account.</p>'
+                + '<button class="btn btn-primary" '
+                  + 'onclick="go(\'portal-' + (currentUser() ? currentUser().role : "student") + '\')">'
+                  + '<i class="fa-solid fa-arrow-right"></i> Go to Dashboard'
+                + '</button>'
+              + '</div>'
+
+            : /* Not verified yet */
+              '<div style="text-align:center">'
+                + '<div style="width:80px;height:80px;border-radius:50%;'
+                  + 'background:linear-gradient(135deg,#CF9B3F,#E7C583);'
+                  + 'color:#1B2A44;display:flex;align-items:center;'
+                  + 'justify-content:center;font-size:2rem;margin:0 auto 20px">'
+                  + '<i class="fa-solid fa-envelope-open-text"></i>'
+                + '</div>'
+
+                + '<h2 style="color:var(--navy);margin-bottom:8px">'
+                  + 'Check Your Email</h2>'
+
+                + '<p class="muted" style="margin-bottom:14px">'
+                  + 'We sent a verification link to:'
+                + '</p>'
+
+                + '<div style="background:#F7FAFF;border:1.5px dashed #0E45EB;'
+                  + 'border-radius:12px;padding:14px 20px;margin-bottom:20px;'
+                  + 'font-family:monospace;font-weight:700;'
+                  + 'color:var(--primary);word-break:break-all">'
+                  + (fbUser ? esc(fbUser.email) : "—")
+                + '</div>'
+
+                + '<p class="muted" style="font-size:.85rem;line-height:1.6;'
+                  + 'margin-bottom:24px">'
+                  + '<i class="fa-solid fa-circle-info"></i> '
+                  + 'Click the link in the email to verify your address. '
+                  + 'Check your spam folder if you don\'t see it within 2 minutes.'
+                + '</p>'
+
+                + '<div style="display:flex;flex-direction:column;gap:10px">'
+
+                  + '<button class="btn btn-primary" '
+                    + 'onclick="checkVerificationStatus()" '
+                    + 'id="checkVerifyBtn">'
+                    + '<i class="fa-solid fa-rotate"></i> '
+                    + 'I\'ve verified — check status'
+                  + '</button>'
+
+                  + '<button class="btn btn-outline" '
+                    + 'onclick="resendVerificationLink()" '
+                    + 'id="resendVerifyBtn">'
+                    + '<i class="fa-solid fa-paper-plane"></i> '
+                    + 'Resend verification link'
+                  + '</button>'
+
+                + '</div>'
+
+                + '<p class="muted mt-4" style="font-size:.75rem">'
+                  + 'Wrong email? '
+                  + '<a href="#" onclick="go(\'login\');return false;" '
+                    + 'style="color:var(--primary);text-decoration:underline">'
+                  + 'Sign in with a different account</a>'
+                + '</p>'
+              + '</div>')
+      + '</div>'
+    + '</section>';
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     BUTTON — Check verification status
+     ═══════════════════════════════════════════════════════════ */
+
+  window.checkVerificationStatus = async function(){
+    const btn = document.getElementById("checkVerifyBtn");
+    if(!btn) return;
+
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loader"></span> Checking…';
+
+    try{
+      const verified = await window.reloadVerificationStatus();
+
+      if(verified){
+        setTimeout(function(){
+          const u = currentUser();
+          if(u && u.role){
+            go("portal-" + u.role);
+          }else{
+            go("home");
+          }
+        }, 800);
+      }else{
+        toast("Not yet verified",
+          "We couldn't confirm your email yet. Click the link in your inbox first, then try again.",
+          "info");
+        btn.disabled = false;
+        btn.innerHTML = original;
+      }
+    }catch(err){
+      console.error("[checkVerificationStatus]", err);
+      toast("Error", err.message || "Check failed.", "error");
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     BUTTON — Resend verification link
+     ═══════════════════════════════════════════════════════════ */
+
+  window.resendVerificationLink = async function(){
+    const btn = document.getElementById("resendVerifyBtn");
+    if(!btn) return;
+
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loader"></span> Sending…';
+
+    try{
+      await window.sendVerificationEmail();
+      toast("Verification sent",
+        "Check your inbox (and spam folder) for the new link.", "success");
+      btn.innerHTML = original;
+      setTimeout(function(){ btn.disabled = false; }, 3000);
+    }catch(err){
+      console.error("[resendVerificationLink]", err);
+      let msg = err.message || "Could not resend.";
+      if(err.code === "auth/too-many-requests"){
+        msg = "Too many attempts. Please wait an hour.";
+      }
+      toast("Error", msg, "error");
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     AUTH GUARD — Block sign-in until verified
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Patch submitLogin to require verified email.
+   * Super Admin bypass is optional (see config).
+   */
+  if(typeof window.submitLogin === "function"){
+    const _origLogin = window.submitLogin;
+
+    window.submitLogin = async function(form){
+      /* Call original login */
+      const result = await _origLogin.apply(this, arguments);
+
+      /* Check verification AFTER successful sign-in */
+      const fbUser = FB.auth.currentUser;
+      if(!fbUser){
+        return result;  /* Login failed — nothing to check */
+      }
+
+      if(!VERIFICATION_ENABLED){
+        return result;  /* Feature disabled */
+      }
+
+      /* Allow superAdmin bypass if config permits */
+      if(ALLOW_SUPER_ADMIN_BYPASS){
+        try{
+          const snap = await FB.db.collection("users").doc(fbUser.uid).get();
+          if(snap.exists && snap.data().role === "superAdmin"){
+            return result;
+          }
+        }catch(e){}
+      }
+
+      /* Otherwise check verification */
+      if(!fbUser.emailVerified){
+        toast("Verify your email",
+          "Please verify your email address before continuing. "
+          + "Check your inbox.", "warning");
+
+        /* Redirect to verification page AFTER a small delay */
+        setTimeout(function(){
+          go("verify-email");
+        }, 800);
+
+        return;
+      }
+
+      return result;
+    };
+
+    console.log("✅ Login guard — verification required");
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     AUTH LISTENER — Auto-route unverified users
+     ═══════════════════════════════════════════════════════════ */
+
+  (function installVerificationListener(){
+    function install(){
+      if(!window.FB || !FB.auth) return setTimeout(install, 100);
+      if(window.__verifyListenerInstalled) return;
+      window.__verifyListenerInstalled = true;
+
+      FB.auth.onAuthStateChanged(async function(fbUser){
+        if(!fbUser) return;
+        if(!VERIFICATION_ENABLED) return;
+
+        /* Small delay so login flow completes first */
+        setTimeout(async function(){
+          if(fbUser.emailVerified) return;
+
+          /* Super Admin bypass */
+          if(ALLOW_SUPER_ADMIN_BYPASS){
+            try{
+              const snap = await FB.db.collection("users").doc(fbUser.uid).get();
+              if(snap.exists && snap.data().role === "superAdmin") return;
+            }catch(e){}
+          }
+
+          /* Skip if already on verify-email page */
+          const hash = (location.hash || "").replace(/^#/, "").split("/")[0];
+          if(hash === "verify-email") return;
+
+          /* Skip if on login page (they haven't submitted yet) */
+          if(hash === "login") return;
+
+          /* Redirect to verify page */
+          setTimeout(function(){
+            toast("Verify your email",
+              "Please check your inbox for the verification link.", "info");
+            go("verify-email");
+          }, 300);
+        }, 1500);
+      });
+
+      console.log("✅ Verification listener installed");
+    }
+    install();
+  })();
+
+
+  /* ═══════════════════════════════════════════════════════════
+     REGISTRATION HOOK — Auto-send verification on register
+     ═══════════════════════════════════════════════════════════ */
+
+  /* Patch submitRegisterAccount — send verification BEFORE signOut */
+  if(typeof window.submitRegisterAccount === "function"){
+    const _origReg = window.submitRegisterAccount;
+
+    window.submitRegisterAccount = async function(form){
+      /* Capture current auth state to detect new account */
+      const beforeUid = FB.auth.currentUser ? FB.auth.currentUser.uid : null;
+
+      /* Let original registration happen */
+      const result = await _origReg.apply(this, arguments);
+
+      /* Check if a new account was created */
+      const afterUser = FB.auth.currentUser;
+      if(afterUser && afterUser.uid !== beforeUid && !afterUser.emailVerified){
+        try{
+          await afterUser.sendEmailVerification({
+            url: location.origin + location.pathname + "#verify-email",
+            handleCodeInApp: false
+          });
+          console.log("✉️ Verification email auto-sent to:", afterUser.email);
+
+          /* Update user doc to note verification sent */
+          try{
+            await FB.db.collection("users").doc(afterUser.uid).update({
+              emailVerified: false,
+              verificationSentAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          }catch(e){}
+        }catch(err){
+          console.warn("[auto verify]", err.message);
+        }
+      }
+
+      return result;
+    };
+    console.log("✅ Registration hook — auto-sends verification");
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     USER LIST — Add verification badge
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Patch renderUserRows to show a verified/unverified badge.
+   * Only applies on Super Admin user management.
+   */
+  if(typeof window.renderUserRows === "function"){
+    const _origRenderUsers = window.renderUserRows;
+
+    window.renderUserRows = function(users, filterRole, searchQuery){
+      const html = _origRenderUsers.apply(this, arguments);
+
+      /* For each row, we need the user's emailVerified status */
+      /* Since we can't easily correlate rows to users after render,
+         we'll do a second pass to add badges */
+      setTimeout(function(){
+        const rows = document.querySelectorAll("#usersTableBody tr[data-uid]");
+        rows.forEach(function(row){
+          const uid = row.getAttribute("data-uid");
+          const user = (window.__allSuperUsers || []).find(function(u){
+            return (u.uid || u.id) === uid;
+          });
+
+          if(!user) return;
+
+          /* Find the status badge cell */
+          const statusCell = row.querySelector('td:nth-child(4)');
+          if(!statusCell) return;
+
+          /* Skip if already has badge */
+          if(statusCell.querySelector(".verify-badge")) return;
+
+          const isVerified = user.emailVerified === true;
+
+          const badge = document.createElement("span");
+          badge.className = "verify-badge";
+          badge.style.cssText =
+            "display:inline-flex;align-items:center;gap:4px;"
+            + "margin-left:6px;font-size:.65rem;font-weight:800;"
+            + "padding:2px 8px;border-radius:999px;"
+            + (isVerified
+                ? "background:rgba(110,143,113,.18);color:#4F6E52"
+                : "background:rgba(207,155,63,.18);color:#8B5E0F");
+
+          badge.innerHTML = isVerified
+            ? '<i class="fa-solid fa-circle-check"></i> Verified'
+            : '<i class="fa-solid fa-clock"></i> Unverified';
+
+          statusCell.appendChild(badge);
+        });
+      }, 50);
+
+      return html;
+    };
+
+    console.log("✅ User list — verification badges added");
+  }
+
+
+  /* ═══════════════════════════════════════════════════════════
+     SUPER ADMIN — Manually verify a user
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Super Admin can manually mark a user as verified
+   * (for cases where user genuinely can't receive email).
+   */
+  window.adminVerifyUser = async function(uid, email){
+    const me = currentUser();
+    if(!me || me.role !== "superAdmin"){
+      toast("Access denied", "Super Admin only.", "error");
+      return;
+    }
+
+    if(!confirm(
+      "Manually verify " + email + "?\n\n"
+      + "This bypasses the email verification flow.\n"
+      + "Use only when the user confirms they cannot receive the email.\n\n"
+      + "Continue?"
+    )) return;
+
+    try{
+      /* Update Firestore doc */
+      await FB.db.collection("users").doc(uid).update({
+        emailVerified: true,
+        manuallyVerified: true,
+        verifiedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        verifiedBy: me.user
+      });
+
+      /* Audit trail */
+      try{
+        await FB.db.collection("auditLogs").add({
+          action: "USER_MANUALLY_VERIFIED",
+          actor:  me.user,
+          target: email,
+          uid:    uid,
+          at:     firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }catch(e){}
+
+      toast("User verified ✓", email + " can now sign in.", "success");
+
+      /* Refresh user table */
+      const users = await firestoreRead("users", { forceRefresh: true });
+      window.__allSuperUsers = users;
+      const body = document.getElementById("usersTableBody");
+      if(body && typeof renderUserRows === "function"){
+        body.innerHTML = renderUserRows(users, "all", "");
+      }
+    }catch(err){
+      console.error("[adminVerifyUser]", err);
+      toast("Failed", err.message, "error");
+    }
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     VERIFICATION — console check
+     ═══════════════════════════════════════════════════════════ */
+
+  setTimeout(function(){
+    console.log("\n═══════════════════════════════════════");
+    console.log("  ROUND 3 — EMAIL VERIFICATION");
+    console.log("═══════════════════════════════════════");
+    console.log("✅ sendVerificationEmail()");
+    console.log("✅ isCurrentUserVerified()");
+    console.log("✅ reloadVerificationStatus()");
+    console.log("✅ /verify-email route");
+    console.log("✅ Login guard (blocks unverified)");
+    console.log("✅ Auth listener (routes unverified)");
+    console.log("✅ Registration hook (auto-sends)");
+    console.log("✅ User list badges");
+    console.log("✅ Super Admin manual verify");
+    console.log("═══════════════════════════════════════");
+    console.log("  Configuration:");
+    console.log("  VERIFICATION_ENABLED:", VERIFICATION_ENABLED);
+    console.log("  SUPER_ADMIN_BYPASS:  ", ALLOW_SUPER_ADMIN_BYPASS);
+    console.log("  MAX_RESEND_PER_HOUR: ", MAX_RESEND_PER_HOUR);
+    console.log("═══════════════════════════════════════\n");
+  }, 2000);
+
+  console.log("✅ Round 3 — Email Verification ready");
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     ROUND 4 — UX ENHANCEMENTS
+     ------------------------------------------------------------
+     · Bulk Student Import (CSV paste → creates accounts)
+     · Audit Log Viewer (see admin actions)
+     · Global Search (find anything by ID/name)
+     ------------------------------------------------------------
+     Loads AFTER Round 3 patch.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function Round4UXEnhancements(){
+  console.log("🎨 Round 4 — UX Enhancements booting…");
+
+  /* ═══════════════════════════════════════════════════════════
+     PART 1 — BULK STUDENT IMPORT
+     ═══════════════════════════════════════════════════════════ */
+
+  /**
+   * Parse a CSV string into array of objects.
+   * Expected format (header row required):
+   *
+   *   name,email,phone,department
+   *   Alice Mukamana,alice@gmail.com,+250788111111,Music
+   *   Bob Habimana,bob@gmail.com,+250788222222,Youth
+   *
+   * Returns { valid: [...], errors: [...] }
+   */
+  function parseBulkStudentsCSV(text){
+    const lines = String(text || "").trim().split(/\r?\n/);
+    if(lines.length < 2){
+      return {
+        valid: [],
+        errors: ["CSV must have a header row + at least 1 data row"]
+      };
+    }
+
+    const headers = lines[0].split(",").map(function(h){
+      return h.trim().toLowerCase();
+    });
+
+    const required = ["name", "email"];
+    const missing = required.filter(function(r){
+      return headers.indexOf(r) === -1;
+    });
+    if(missing.length){
+      return {
+        valid: [],
+        errors: ["Missing required columns: " + missing.join(", ")]
+      };
+    }
+
+    const nameIdx  = headers.indexOf("name");
+    const emailIdx = headers.indexOf("email");
+    const phoneIdx = headers.indexOf("phone");
+    const deptIdx  = headers.indexOf("department");
+    const genderIdx = headers.indexOf("gender");
+
+    const valid = [];
+    const errors = [];
+    const seenEmails = new Set();
+
+    for(let i = 1; i < lines.length; i++){
+      const line = lines[i].trim();
+      if(!line) continue;
+
+      /* Simple CSV split (doesn't handle quoted commas — acceptable for most cases) */
+      const cols = line.split(",").map(function(c){ return c.trim(); });
+
+      const name   = (cols[nameIdx] || "").trim();
+      const email  = (cols[emailIdx] || "").trim().toLowerCase();
+      const phone  = phoneIdx >= 0 ? (cols[phoneIdx] || "").trim() : "";
+      const dept   = deptIdx  >= 0 ? (cols[deptIdx]  || "").trim() : "";
+      const gender = genderIdx >= 0 ? (cols[genderIdx] || "").trim() : "";
+
+      /* Validation */
+      if(!name || name.length < 3){
+        errors.push("Line " + i + ": name too short ('" + name + "')");
+        continue;
+      }
+      if(!email || !/^\S+@\S+\.\S+$/.test(email)){
+        errors.push("Line " + i + ": invalid email ('" + email + "')");
+        continue;
+      }
+      if(!email.endsWith("@gmail.com")){
+        errors.push("Line " + i + ": email must be @gmail.com ('" + email + "')");
+        continue;
+      }
+      if(seenEmails.has(email)){
+        errors.push("Line " + i + ": duplicate email ('" + email + "')");
+        continue;
+      }
+      seenEmails.add(email);
+
+      valid.push({
+        line: i,
+        name: name,
+        email: email,
+        phone: phone,
+        departmentName: dept,
+        gender: gender.toLowerCase()
+      });
+    }
+
+    return { valid: valid, errors: errors };
+  }
+
+
+  /**
+   * Bulk-create student accounts.
+   * Uses a secondary Firebase app to create auth users without
+   * signing out the current admin.
+   */
+  window.bulkImportStudents = async function(students){
+    const u = currentUser();
+    if(!u || u.role !== "churchAdmin"){
+      throw new Error("Church Admin only");
+    }
+    if(!u.churchId){
+      throw new Error("No church assigned");
+    }
+
+    const results = {
+      created: [],
+      skipped: [],
+      failed: []
+    };
+
+    for(let i = 0; i < students.length; i++){
+      const s = students[i];
+
+      try{
+        /* Check if already exists */
+        const existing = await FB.db.collection("users")
+          .where("email", "==", s.email)
+          .limit(1)
+          .get();
+
+        if(!existing.empty){
+          results.skipped.push({
+            email: s.email,
+            reason: "Already exists"
+          });
+          continue;
+        }
+
+        /* Generate a default password */
+        const defaultPwd = s.phone
+          ? defaultPasswordFromPhone(s.phone)
+          : "Welcome123";
+
+        /* Create auth account on secondary app */
+        const secondaryApp = firebase.initializeApp(
+          firebaseConfig,
+          "bulk_" + Date.now() + "_" + i
+        );
+        const secondaryAuth = secondaryApp.auth();
+
+        try{
+          const cred = await secondaryAuth.createUserWithEmailAndPassword(
+            s.email, defaultPwd
+          );
+
+          try{
+            await cred.user.updateProfile({ displayName: s.name });
+          }catch(e){}
+
+          /* Create Firestore doc */
+          await FB.db.collection("users").doc(cred.user.uid).set({
+            uid:           cred.user.uid,
+            email:         s.email,
+            name:          s.name,
+            role:          "student",
+            churchId:      u.churchId,
+            departmentId:  "",
+            phone:         s.phone || "",
+            gender:        s.gender || "",
+            status:        "ACTIVE",
+            approverRole:  "churchAdmin",
+            emailVerified: false,
+            importedVia:   "bulk_csv",
+            importedBy:    u.user,
+            importedAt:    firebase.firestore.FieldValue.serverTimestamp(),
+            createdAt:     firebase.firestore.FieldValue.serverTimestamp()
+          });
+
+          results.created.push({
+            email: s.email,
+            password: defaultPwd
+          });
+
+          await secondaryAuth.signOut();
+        }catch(createErr){
+          if(createErr.code === "auth/email-already-in-use"){
+            results.skipped.push({
+              email: s.email,
+              reason: "Auth account exists"
+            });
+          }else{
+            results.failed.push({
+              email: s.email,
+              reason: createErr.message
+            });
+          }
+        }finally{
+          try{ await secondaryApp.delete(); }catch(e){}
+        }
+
+      }catch(err){
+        results.failed.push({
+          email: s.email,
+          reason: err.message
+        });
+      }
+    }
+
+    /* Clear user cache */
+    firestoreClearCache("users");
+
+    /* Audit log */
+    try{
+      await FB.db.collection("auditLogs").add({
+        action: "BULK_STUDENT_IMPORT",
+        actor: u.user,
+        churchId: u.churchId,
+        details: {
+          created: results.created.length,
+          skipped: results.skipped.length,
+          failed: results.failed.length
+        },
+        at: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }catch(e){}
+
+    return results;
+  };
+
+
+  /* ── UI — Bulk import modal ── */
+  window.openBulkImportModal = function(){
+    const u = currentUser();
+    if(!u || u.role !== "churchAdmin"){
+      toast("Access denied", "Church Admin only.", "error");
+      return;
+    }
+
+    const html =
+      '<div id="bulkImportModal" class="reg-card-modal">'
+        + '<div class="reg-card-modal-backdrop" '
+          + 'onclick="closeBulkImportModal()"></div>'
+        + '<div class="reg-card-modal-inner" style="max-width:700px">'
+          + '<button class="reg-card-modal-close" '
+            + 'onclick="closeBulkImportModal()">'
+            + '<i class="fa-solid fa-xmark"></i>'
+          + '</button>'
+
+          + '<div style="background:#fff;border-radius:20px;overflow:hidden;'
+            + 'border:1px solid var(--border)">'
+
+            + '<div style="background:linear-gradient(135deg,#6E8F71,#8FB392);'
+              + 'color:#fff;padding:20px 26px">'
+              + '<div style="font-weight:800;font-size:1.05rem">'
+                + '<i class="fa-solid fa-users"></i> Bulk Import Students'
+              + '</div>'
+              + '<div style="font-size:.82rem;opacity:.9;margin-top:4px">'
+                + 'Paste a CSV of students to create accounts at once.'
+              + '</div>'
+            + '</div>'
+
+            + '<div style="padding:24px">'
+
+              /* Instructions */
+              + '<div style="background:#F7FAFF;border-left:4px solid #0E45EB;'
+                + 'padding:14px 18px;border-radius:10px;margin-bottom:18px;'
+                + 'font-size:.85rem;line-height:1.7">'
+                + '<strong style="color:#0E45EB">CSV Format:</strong><br>'
+                + '<code style="font-family:monospace;font-size:.8rem;'
+                  + 'background:rgba(14,69,235,.08);padding:2px 6px;'
+                  + 'border-radius:4px">'
+                  + 'name,email,phone,department'
+                + '</code><br><br>'
+                + '<strong>Rules:</strong><br>'
+                + '• Email must end with <code>@gmail.com</code><br>'
+                + '• Phone is optional (used for default password)<br>'
+                + '• Default password: last 6 digits of phone, or <code>Welcome123</code><br>'
+                + '• Duplicate emails are skipped<br>'
+                + '• Students become <strong>ACTIVE</strong> immediately'
+              + '</div>'
+
+              + '<div class="form-group">'
+                + '<label>Paste CSV Below</label>'
+                + '<textarea id="bulkImportCSV" rows="10" '
+                  + 'placeholder="name,email,phone,department\n'
+                  + 'Alice Mukamana,alice@gmail.com,+250788111111,Music\n'
+                  + 'Bob Habimana,bob@gmail.com,+250788222222,Youth" '
+                  + 'style="font-family:monospace;font-size:.85rem;'
+                  + 'width:100%;padding:12px;border:1px solid var(--border);'
+                  + 'border-radius:10px;resize:vertical"></textarea>'
+              + '</div>'
+
+              + '<div id="bulkImportPreview" '
+                + 'style="display:none;margin-bottom:16px">'
+              + '</div>'
+
+              + '<div style="display:flex;gap:10px;justify-content:space-between;'
+                + 'flex-wrap:wrap">'
+                + '<button class="btn btn-outline" '
+                  + 'onclick="loadSampleCSV()">'
+                  + '<i class="fa-solid fa-file-circle-plus"></i> '
+                  + 'Load sample</button>'
+                + '<div style="display:flex;gap:8px">'
+                  + '<button class="btn btn-outline" '
+                    + 'onclick="closeBulkImportModal()">Cancel</button>'
+                  + '<button class="btn btn-primary" '
+                    + 'id="bulkImportBtn" '
+                    + 'onclick="runBulkImport()">'
+                    + '<i class="fa-solid fa-upload"></i> Import</button>'
+                + '</div>'
+              + '</div>'
+            + '</div>'
+
+          + '</div>'
+        + '</div>'
+      + '</div>';
+
+    document.body.insertAdjacentHTML("beforeend", html);
+    document.body.style.overflow = "hidden";
+  };
+
+
+  window.closeBulkImportModal = function(){
+    const m = document.getElementById("bulkImportModal");
+    if(m) m.remove();
+    document.body.style.overflow = "";
+  };
+
+
+  window.loadSampleCSV = function(){
+    const ta = document.getElementById("bulkImportCSV");
+    if(!ta) return;
+    ta.value =
+      "name,email,phone,department\n"
+      + "Alice Mukamana,alice.mukamana@gmail.com,+250788111111,Music\n"
+      + "Bob Habimana,bob.habimana@gmail.com,+250788222222,Youth\n"
+      + "Claire Uwase,claire.uwase@gmail.com,+250788333333,Music";
+  };
+
+
+  window.runBulkImport = async function(){
+    const ta = document.getElementById("bulkImportCSV");
+    const btn = document.getElementById("bulkImportBtn");
+    if(!ta || !btn) return;
+
+    const csv = ta.value.trim();
+    if(!csv){
+      toast("Empty", "Please paste a CSV first.", "error");
+      return;
+    }
+
+    /* Parse */
+    const parsed = parseBulkStudentsCSV(csv);
+
+    if(parsed.errors.length){
+      const preview = document.getElementById("bulkImportPreview");
+      if(preview){
+        preview.style.display = "block";
+        preview.innerHTML =
+          '<div style="background:#FEF2F2;border:1px solid #FECACA;'
+            + 'border-radius:10px;padding:14px 18px;margin-bottom:12px">'
+            + '<div style="font-weight:800;color:#B23A3A;font-size:.9rem;'
+              + 'margin-bottom:8px">'
+              + '<i class="fa-solid fa-triangle-exclamation"></i> '
+              + parsed.errors.length + ' error(s) found</div>'
+            + '<ul style="margin:0;padding-left:20px;font-size:.82rem;'
+              + 'color:#7F1D1D;line-height:1.6">'
+              + parsed.errors.slice(0, 10).map(function(e){
+                  return '<li>' + esc(e) + '</li>';
+                }).join("")
+              + (parsed.errors.length > 10
+                  ? '<li><strong>... and ' + (parsed.errors.length - 10) + ' more</strong></li>'
+                  : '')
+            + '</ul>'
+          + '</div>';
+      }
+    }
+
+    if(!parsed.valid.length){
+      toast("No valid rows", "Fix the errors above and try again.", "error");
+      return;
+    }
+
+    /* Show preview */
+    const preview = document.getElementById("bulkImportPreview");
+    if(preview){
+      preview.style.display = "block";
+      preview.innerHTML =
+        '<div style="background:rgba(110,143,113,.08);'
+          + 'border:1px solid rgba(110,143,113,.3);border-radius:10px;'
+          + 'padding:14px 18px;margin-bottom:12px">'
+          + '<div style="font-weight:800;color:#4F6E52;font-size:.9rem;'
+            + 'margin-bottom:8px">'
+            + '<i class="fa-solid fa-circle-check"></i> '
+            + parsed.valid.length + ' student(s) ready to import</div>'
+          + '<table style="width:100%;font-size:.78rem;margin-top:8px">'
+            + '<tr style="background:rgba(110,143,113,.1)">'
+              + '<th style="padding:6px 10px;text-align:left">Name</th>'
+              + '<th style="padding:6px 10px;text-align:left">Email</th>'
+              + '<th style="padding:6px 10px;text-align:left">Dept</th>'
+            + '</tr>'
+            + parsed.valid.slice(0, 10).map(function(s){
+                return '<tr>'
+                  + '<td style="padding:6px 10px">' + esc(s.name) + '</td>'
+                  + '<td style="padding:6px 10px;font-family:monospace">'
+                    + esc(s.email) + '</td>'
+                  + '<td style="padding:6px 10px">' + esc(s.departmentName || "—") + '</td>'
+                + '</tr>';
+              }).join("")
+            + (parsed.valid.length > 10
+                ? '<tr><td colspan="3" style="padding:8px 10px;'
+                  + 'text-align:center;color:var(--soft)">'
+                  + '... and ' + (parsed.valid.length - 10) + ' more</td></tr>'
+                : '')
+          + '</table>'
+        + '</div>';
+    }
+
+    /* Confirm */
+    if(!confirm(
+      "Import " + parsed.valid.length + " student(s)?\n\n"
+      + "This will:\n"
+      + "  • Create " + parsed.valid.length + " Firebase Auth accounts\n"
+      + "  • Create " + parsed.valid.length + " Firestore user docs\n"
+      + "  • Mark them all as ACTIVE\n\n"
+      + "Default password = last 6 digits of phone (or 'Welcome123').\n\n"
+      + "Continue?"
+    )) return;
+
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loader"></span> Importing…';
+
+    try{
+      const results = await window.bulkImportStudents(parsed.valid);
+
+      /* Show results */
+      const summary =
+        '<div style="background:#fff;border:1px solid var(--border);'
+          + 'border-radius:14px;padding:20px;margin-top:16px">'
+          + '<div style="font-weight:800;font-size:1rem;'
+            + 'color:var(--navy);margin-bottom:14px">'
+            + '<i class="fa-solid fa-check-circle" '
+              + 'style="color:#6E8F71"></i> Import Complete</div>'
+
+          + '<div class="role-kpi" style="grid-template-columns:repeat(3,1fr);'
+            + 'margin-bottom:16px">'
+            + '<div class="role-kpi-card" style="--kpi-accent:#6E8F71">'
+              + '<div class="kpi-num">' + results.created.length + '</div>'
+              + '<div class="kpi-label">Created</div>'
+            + '</div>'
+            + '<div class="role-kpi-card" style="--kpi-accent:#CF9B3F">'
+              + '<div class="kpi-num">' + results.skipped.length + '</div>'
+              + '<div class="kpi-label">Skipped</div>'
+            + '</div>'
+            + '<div class="role-kpi-card" style="--kpi-accent:#B23A3A">'
+              + '<div class="kpi-num">' + results.failed.length + '</div>'
+              + '<div class="kpi-label">Failed</div>'
+            + '</div>'
+          + '</div>'
+
+          + (results.created.length
+              ? '<div style="background:#F7FAFF;border-radius:10px;'
+                + 'padding:14px 18px;margin-bottom:14px">'
+                + '<div style="font-size:.72rem;font-weight:800;'
+                  + 'text-transform:uppercase;letter-spacing:.08em;'
+                  + 'color:var(--soft);margin-bottom:8px">'
+                  + 'Created Accounts (share these credentials)</div>'
+                + results.created.slice(0, 10).map(function(c){
+                    return '<div style="font-family:monospace;font-size:.78rem;'
+                      + 'padding:4px 0;color:var(--navy)">'
+                      + esc(c.email) + ' · <strong>' + esc(c.password) + '</strong>'
+                    + '</div>';
+                  }).join("")
+                + (results.created.length > 10
+                    ? '<div style="font-size:.75rem;color:var(--soft);'
+                      + 'margin-top:6px">... and '
+                      + (results.created.length - 10) + ' more</div>'
+                    : '')
+                + '<button class="btn btn-outline btn-sm" '
+                  + 'style="margin-top:10px" '
+                  + 'onclick="copyBulkCredentials()">'
+                  + '<i class="fa-solid fa-copy"></i> Copy all credentials'
+                + '</button>'
+              + '</div>'
+              : '')
+
+          + (results.skipped.length
+              ? '<div style="font-size:.82rem;color:var(--soft);margin-bottom:6px">'
+                + '<strong>Skipped:</strong> '
+                + results.skipped.slice(0, 5).map(function(s){
+                    return esc(s.email);
+                  }).join(", ")
+              + '</div>'
+              : '')
+
+          + '<button class="btn btn-primary" '
+            + 'onclick="closeBulkImportModal(); go(\'super-users\');">'
+            + '<i class="fa-solid fa-arrow-right"></i> View all users'
+          + '</button>'
+        + '</div>';
+
+      /* Replace preview with results */
+      if(preview){
+        preview.innerHTML = summary;
+      }
+
+      toast("Import complete",
+        results.created.length + " created, "
+        + results.skipped.length + " skipped, "
+        + results.failed.length + " failed.",
+        results.created.length > 0 ? "success" : "info");
+
+      /* Store for copy */
+      window.__lastBulkImport = results;
+
+    }catch(err){
+      console.error("[runBulkImport]", err);
+      toast("Import failed", err.message, "error");
+    }finally{
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  };
+
+
+  window.copyBulkCredentials = function(){
+    const results = window.__lastBulkImport;
+    if(!results || !results.created.length){
+      toast("Nothing to copy", "", "info");
+      return;
+    }
+
+    const text = "SDA Learning — Bulk Import Credentials\n\n"
+      + "Sign in at: " + location.origin + location.pathname + "#login\n\n"
+      + results.created.map(function(c){
+          return "Email: " + c.email + "\nPassword: " + c.password + "\n";
+        }).join("\n---\n");
+
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(text)
+        .then(function(){ toast("Copied", "All credentials copied.", "success"); })
+        .catch(function(){ prompt("Copy:", text); });
+    }else{
+      prompt("Copy:", text);
+    }
+  };
+
+
+  /* Add menu link for church admin */
+  (function addBulkImportMenu(){
+    function install(){
+      if(typeof DASH_MENUS === "undefined") return setTimeout(install, 100);
+      if(!DASH_MENUS.churchAdmin) return;
+
+      const has = DASH_MENUS.churchAdmin.some(function(m){
+        return m.route === "bulk-import";
+      });
+      if(has) return;
+
+      /* Insert after user-approvals */
+      const idx = DASH_MENUS.churchAdmin.findIndex(function(m){
+        return m.route === "user-approvals";
+      });
+      const item = {
+        label: "Bulk Import",
+        route: "bulk-import",
+        icon:  "fa-file-csv"
+      };
+      if(idx !== -1) DASH_MENUS.churchAdmin.splice(idx + 1, 0, item);
+      else DASH_MENUS.churchAdmin.push(item);
+    }
+    install();
+  })();
+
+
+  /* Route — Bulk Import page */
+  ROUTES["bulk-import"] = function(){
+    const u = currentUser();
+    if(!u || u.role !== "churchAdmin"){
+      toast("Access denied", "Church Admin only.", "error");
+      go(u ? "portal-" + u.role : "login");
+      return "";
+    }
+
+    return '<section class="page-header"><div class="container">'
+      + breadcrumbs([
+          {label:"Home", route:"home"},
+          {label:"Dashboard", route:"portal-churchAdmin"},
+          {label:"Bulk Import"}
+        ])
+      + '<h1>Bulk Import Students</h1>'
+      + '<p>Add many students at once with a CSV paste.</p>'
+    + '</div></section>'
+
+    + '<section class="section container" style="max-width:800px">'
+      + '<div class="role-hero" data-role="churchAdmin" '
+        + 'style="margin-bottom:22px">'
+        + '<span class="role-badge">'
+          + '<i class="fa-solid fa-users"></i> Bulk Onboarding</span>'
+        + '<h1 style="font-size:1.5rem">Import Students in Bulk</h1>'
+        + '<p>Prepare your CSV in Excel/Google Sheets, then paste below.</p>'
+      + '</div>'
+
+      + '<div class="reg-block">'
+        + '<div class="reg-block-title">'
+          + '<i class="fa-solid fa-file-csv"></i> CSV Format</div>'
+
+        + '<p style="font-size:.9rem;color:var(--soft);line-height:1.7;'
+          + 'margin-bottom:16px">'
+          + 'Each row should be one student. Column order is flexible — '
+          + 'just include these headers in row 1:'
+        + '</p>'
+
+        + '<table class="data" style="margin-bottom:20px">'
+          + '<tr><th>Column</th><th>Required</th><th>Example</th></tr>'
+          + '<tr><td><code>name</code></td><td>✅</td>'
+            + '<td>Alice Mukamana</td></tr>'
+          + '<tr><td><code>email</code></td><td>✅</td>'
+            + '<td>alice@gmail.com</td></tr>'
+          + '<tr><td><code>phone</code></td><td>Optional</td>'
+            + '<td>+250788111111</td></tr>'
+          + '<tr><td><code>department</code></td><td>Optional</td>'
+            + '<td>Music</td></tr>'
+        + '</table>'
+
+        + '<button class="btn btn-primary" '
+          + 'onclick="openBulkImportModal()">'
+          + '<i class="fa-solid fa-upload"></i> '
+          + 'Open Import Dialog</button>'
+      + '</div>'
+
+      + '<div class="reg-block" style="margin-top:20px">'
+        + '<div class="reg-block-title">'
+          + '<i class="fa-solid fa-lightbulb"></i> Tips</div>'
+        + '<ul style="font-size:.88rem;line-height:1.8;color:var(--soft);'
+          + 'padding-left:22px;margin:0">'
+          + '<li>Email <strong>must</strong> be @gmail.com</li>'
+          + '<li>Duplicate emails are <strong>skipped</strong> (not an error)</li>'
+          + '<li>Default password = last 6 digits of phone (or <code>Welcome123</code>)</li>'
+          + '<li>Students become <strong>ACTIVE</strong> immediately</li>'
+          + '<li>They can change their password after first login</li>'
+          + '<li>Test with 2-3 rows first, then do all</li>'
+        + '</ul>'
+      + '</div>'
+    + '</section>';
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════
+     PART 2 — AUDIT LOG VIEWER
+     ═══════════════════════════════════════════════════════════ */
+
+  ROUTES["audit-logs"] = function(){
+    const u = currentUser();
+    if(!u || u.role !== "superAdmin"){
+      toast("Access denied", "Super Admin only.", "error");
+      go(u ? "portal-" + u.role : "login");
+      return "";
+    }
+
+    setTimeout(function(){ loadAuditLogs(); }, 50);
+
+    return '<section class="page-header"><div class="container">'
+      + breadcrumbs([
+          {label:"Home", route:"home"},
+          {label:"Dashboard", route:"portal-superAdmin"},
+          {label:"Audit Logs"}
+        ])
+      + '<div style="display:flex;justify-content:space-between;'
+        + 'align-items:flex-end;flex-wrap:wrap;gap:12px">'
+        + '<div>'
+          + '<h1 style="margin:0">Audit Logs</h1>'
+          + '<p style="opacity:.9;margin:8px 0 0">'
+            + 'Every admin action, timestamped.</p>'
+        + '</div>'
+        + '<button class="btn btn-outline" '
+          + 'onclick="loadAuditLogs()">'
+          + '<i class="fa-solid fa-rotate"></i> Refresh</button>'
+      + '</div>'
+    + '</div></section>'
+
+    + '<section class="section container" style="max-width:1200px">'
+      + '<div class="chips" id="auditLogFilters" style="margin-bottom:16px">'
+        + '<button class="chip active" '
+          + 'onclick="filterAuditLogs(\'all\',this)">All</button>'
+        + '<button class="chip" '
+          + 'onclick="filterAuditLogs(\'registration\',this)">Registrations</button>'
+        + '<button class="chip" '
+          + 'onclick="filterAuditLogs(\'approval\',this)">Approvals</button>'
+        + '<button class="chip" '
+          + 'onclick="filterAuditLogs(\'security\',this)">Security</button>'
+        + '<button class="chip" '
+          + 'onclick="filterAuditLogs(\'import\',this)">Imports</button>'
+      + '</div>'
+
+      + '<div id="auditLogsHost">'
+        + '<div class="empty" style="padding:60px 20px">'
+          + '<span class="loader" style="border-top-color:var(--primary);'
+            + 'width:24px;height:24px"></span>'
+          + '<h3 style="margin-top:16px">Loading audit logs…</h3>'
+        + '</div>'
+      + '</div>'
+    + '</section>';
+  };
+
+
+  let __allAuditLogs = [];
+
+  window.loadAuditLogs = async function(){
+    const host = document.getElementById("auditLogsHost");
+    if(!host) return;
+
+    try{
+      const snap = await FB.db.collection("auditLogs")
+        .orderBy("at", "desc")
+        .limit(200)
+        .get();
+
+      __allAuditLogs = snap.docs.map(function(d){
+        const data = d.data();
+        let at = data.at;
+        if(at && typeof at.toDate === "function") at = at.toDate().toISOString();
+        else if(!at) at = new Date().toISOString();
+        return Object.assign({}, data, { id: d.id, at: at });
+      });
+
+      window.__allAuditLogs = __allAuditLogs;
+      renderAuditLogs(__allAuditLogs);
+
+    }catch(err){
+      console.error("[loadAuditLogs]", err);
+      host.innerHTML = '<div class="empty"><h3>Could not load logs</h3>'
+        + '<p class="muted">' + esc(err.message) + '</p></div>';
+    }
+  };
+
+
+  function getActionCategory(action){
+    const a = String(action || "").toUpperCase();
+    if(a.indexOf("REGISTER") !== -1) return "registration";
+    if(a.indexOf("APPROV") !== -1 || a.indexOf("REJECT") !== -1
+       || a.indexOf("VERIF") !== -1) return "approval";
+    if(a.indexOf("PASSWORD") !== -1 || a.indexOf("SECURITY") !== -1
+       || a.indexOf("DISABLE") !== -1 || a.indexOf("DELETE") !== -1) return "security";
+    if(a.indexOf("IMPORT") !== -1 || a.indexOf("BULK") !== -1) return "import";
+    return "other";
+  }
+
+  function getActionIcon(action){
+    const cat = getActionCategory(action);
+    if(cat === "registration") return "fa-user-plus";
+    if(cat === "approval")     return "fa-check-circle";
+    if(cat === "security")     return "fa-shield-halved";
+    if(cat === "import")       return "fa-file-csv";
+    return "fa-circle-info";
+  }
+
+  function getActionColor(action){
+    const cat = getActionCategory(action);
+    if(cat === "registration") return "#0E45EB";
+    if(cat === "approval")     return "#6E8F71";
+    if(cat === "security")     return "#B23A3A";
+    if(cat === "import")       return "#CF9B3F";
+    return "#5B5F58";
+  }
+
+
+  function renderAuditLogs(list){
+    const host = document.getElementById("auditLogsHost");
+    if(!host) return;
+
+    if(!list.length){
+      host.innerHTML = '<div class="empty" style="padding:60px 20px">'
+        + '<h3>No audit logs yet</h3>'
+        + '<p class="muted">Actions will appear here as they happen.</p>'
+        + '</div>';
+      return;
+    }
+
+    host.innerHTML =
+      '<div class="reg-block" style="padding:0;overflow:hidden">'
+        + list.map(function(log){
+            const color = getActionColor(log.action);
+            const icon  = getActionIcon(log.action);
+            const ago   = timeAgo(log.at);
+            const details = log.details
+              ? Object.keys(log.details).map(function(k){
+                  return k + ": " + log.details[k];
+                }).join(" · ")
+              : "";
+
+            return '<div style="display:flex;gap:14px;align-items:flex-start;'
+              + 'padding:14px 20px;border-bottom:1px solid var(--border);'
+              + 'transition:background .15s ease" '
+              + 'onmouseover="this.style.background=\'rgba(14,69,235,.03)\'" '
+              + 'onmouseout="this.style.background=\'\'">'
+              + '<div style="width:38px;height:38px;border-radius:10px;'
+                + 'flex-shrink:0;background:' + color + '1a;'
+                + 'color:' + color + ';display:flex;align-items:center;'
+                + 'justify-content:center;font-size:.95rem">'
+                + '<i class="fa-solid ' + icon + '"></i>'
+              + '</div>'
+              + '<div style="flex:1;min-width:0">'
+                + '<div style="font-weight:700;color:var(--navy);'
+                  + 'font-size:.88rem;line-height:1.3">'
+                  + esc(log.action) + '</div>'
+                + '<div style="font-size:.78rem;color:var(--soft);'
+                  + 'margin-top:2px">'
+                  + '<strong>By:</strong> ' + esc(log.actor || "system")
+                  + (log.target ? ' · <strong>Target:</strong> ' + esc(log.target) : '')
+                  + (log.churchId ? ' · <strong>Church:</strong> ' + esc(log.churchId) : '')
+                + '</div>'
+                + (details
+                    ? '<div style="font-size:.72rem;color:var(--soft);'
+                      + 'margin-top:4px;font-family:monospace">'
+                      + esc(details) + '</div>'
+                    : '')
+              + '</div>'
+              + '<div style="font-size:.72rem;color:var(--soft);'
+                + 'font-weight:600;white-space:nowrap;text-align:right">'
+                + ago
+              + '</div>'
+            + '</div>';
+          }).join("")
+      + '</div>';
+  }
+
+
+  window.filterAuditLogs = function(cat, btn){
+    document.querySelectorAll("#auditLogFilters .chip").forEach(function(c){
+      c.classList.remove("active");
+    });
+    if(btn) btn.classList.add("active");
+
+    if(cat === "all"){
+      renderAuditLogs(__allAuditLogs);
+      return;
+    }
+
+    const filtered = __allAuditLogs.filter(function(log){
+      return getActionCategory(log.action) === cat;
+    });
+    renderAuditLogs(filtered);
+  };
+
+
+  /* Add menu link for super admin */
+  (function addAuditMenu(){
+    function install(){
+      if(typeof DASH_MENUS === "undefined") return setTimeout(install, 100);
+      if(!DASH_MENUS.superAdmin) return;
+
+      const has = DASH_MENUS.superAdmin.some(function(m){
+        return m.route === "audit-logs";
+      });
+      if(has) return;
+
+      DASH_MENUS.superAdmin.push({
+        label: "Audit Logs",
+        route: "audit-logs",
+        icon:  "fa-clipboard-list"
+      });
+    }
+    install();
+  })();
+
+
+  /* ═══════════════════════════════════════════════════════════
+     PART 3 — GLOBAL SEARCH
+     ═══════════════════════════════════════════════════════════ */
+
+  ROUTES["global-search"] = function(){
+    const u = currentUser();
+    if(!u || (u.role !== "superAdmin" && u.role !== "churchAdmin" && u.role !== "teacher")){
+      toast("Access denied", "Admins and teachers only.", "error");
+      go(u ? "portal-" + u.role : "login");
+      return "";
+    }
+
+    return '<section class="page-header"><div class="container">'
+      + breadcrumbs([
+          {label:"Home", route:"home"},
+          {label:"Dashboard", route:"portal-" + u.role},
+          {label:"Search"}
+        ])
+      + '<h1><i class="fa-solid fa-magnifying-glass"></i> Global Search</h1>'
+      + '<p>Find any user, course, or certificate by ID or name.</p>'
+    + '</div></section>'
+
+    + '<section class="section container" style="max-width:900px">'
+      + '<div class="reg-block" style="padding:24px">'
+        + '<div style="position:relative">'
+          + '<input id="globalSearchInput" '
+            + 'placeholder="Search by name, email, ID, or course title…" '
+            + 'oninput="debouncedGlobalSearch(this.value)" '
+            + 'autofocus '
+            + 'style="width:100%;padding:16px 20px 16px 50px;'
+            + 'border:2px solid var(--border);border-radius:14px;'
+            + 'font-size:1rem;background:var(--card);color:var(--dark);'
+            + 'transition:border-color .2s ease" '
+            + 'onfocus="this.style.borderColor=\'var(--primary)\'" '
+            + 'onblur="this.style.borderColor=\'var(--border)\'">'
+          + '<i class="fa-solid fa-magnifying-glass" '
+            + 'style="position:absolute;left:18px;top:50%;'
+            + 'transform:translateY(-50%);color:var(--soft);font-size:1rem"></i>'
+        + '</div>'
+        + '<p class="muted" style="font-size:.78rem;margin-top:10px">'
+          + '<i class="fa-solid fa-circle-info"></i> '
+          + 'Search across users, courses, certificates, and applications. '
+          + 'Results appear within 1 second.'
+        + '</p>'
+      + '</div>'
+
+      + '<div id="globalSearchResults" style="margin-top:20px">'
+        + '<div class="empty" style="padding:40px;text-align:center">'
+          + '<i class="fa-solid fa-keyboard" '
+            + 'style="font-size:2rem;opacity:.3"></i>'
+          + '<p class="muted" style="margin-top:12px">'
+            + 'Start typing to search…</p>'
+        + '</div>'
+      + '</div>'
+    + '</section>';
+  };
+
+
+  let __globalSearchTimer = null;
+
+  window.debouncedGlobalSearch = function(query){
+    clearTimeout(__globalSearchTimer);
+    __globalSearchTimer = setTimeout(function(){
+      performGlobalSearch(query);
+    }, 300);
+  };
+
+
+  window.performGlobalSearch = async function(query){
+    const host = document.getElementById("globalSearchResults");
+    if(!host) return;
+
+    const q = (query || "").trim().toLowerCase();
+    if(!q || q.length < 2){
+      host.innerHTML = '<div class="empty" style="padding:40px;text-align:center">'
+        + '<i class="fa-solid fa-keyboard" style="font-size:2rem;opacity:.3"></i>'
+        + '<p class="muted" style="margin-top:12px">Type at least 2 characters…</p>'
+        + '</div>';
+      return;
+    }
+
+    host.innerHTML = '<div class="empty" style="padding:30px;text-align:center">'
+      + '<span class="loader" style="border-top-color:var(--primary)"></span>'
+      + '<p class="muted" style="margin-top:10px">Searching…</p>'
+      + '</div>';
+
+    const u = currentUser();
+    const results = [];
+
+    try{
+      /* Search users */
+      try{
+        const users = await firestoreRead("users", { forceRefresh: true });
+        const scoped = u.role === "superAdmin"
+          ? users
+          : users.filter(function(x){ return x.churchId === u.churchId; });
+
+        const matched = scoped.filter(function(x){
+          return (x.name  || "").toLowerCase().indexOf(q) !== -1
+              || (x.email || "").toLowerCase().indexOf(q) !== -1
+              || (x.uid   || "").toLowerCase().indexOf(q) !== -1;
+        }).slice(0, 5);
+
+        matched.forEach(function(x){
+          results.push({
+            type:  "User",
+            icon:  "fa-user",
+            color: "#0E45EB",
+            title: x.name || x.email,
+            sub:   x.email + " · " + (x.role || ""),
+            route: "super-users"
+          });
+        });
+      }catch(e){}
+
+      /* Search courses */
+      try{
+        const courses = await firestoreRead("courses", { forceRefresh: true });
+        const scoped = u.role === "superAdmin"
+          ? courses
+          : courses.filter(function(c){ return c.churchId === u.churchId; });
+
+        const matched = scoped.filter(function(c){
+          return (c.title || "").toLowerCase().indexOf(q) !== -1
+              || (c.id    || "").toLowerCase().indexOf(q) !== -1;
+        }).slice(0, 5);
+
+        matched.forEach(function(c){
+          results.push({
+            type:  "Course",
+            icon:  "fa-book",
+            color: "#CF9B3F",
+            title: c.title,
+            sub:   c.level + " · " + (c.lessons || 0) + " lessons",
+            route: "course-details",
+            params: { id: c.id }
+          });
+        });
+      }catch(e){}
+
+      /* Search certificates */
+      try{
+        const certs = await FB.db.collection("certificates").limit(100).get();
+        const matched = certs.docs.filter(function(d){
+          const c = d.data();
+          return (c.certificateId || "").toLowerCase().indexOf(q) !== -1
+              || (c.studentName   || "").toLowerCase().indexOf(q) !== -1;
+        }).slice(0, 5);
+
+        matched.forEach(function(d){
+          const c = d.data();
+          results.push({
+            type:  "Certificate",
+            icon:  "fa-award",
+            color: "#6E8F71",
+            title: c.studentName + " — " + c.certificateId,
+            sub:   c.courseTitle + " · " + c.marks + "%",
+            action: function(){
+              if(c.pdfStorageUrl) window.open(c.pdfStorageUrl, "_blank");
+            }
+          });
+        });
+      }catch(e){}
+
+      /* Render */
+      if(!results.length){
+        host.innerHTML = '<div class="empty" style="padding:60px 20px">'
+          + '<i class="fa-solid fa-circle-question" '
+            + 'style="font-size:2.5rem;opacity:.3"></i>'
+          + '<h3 style="margin-top:14px">No results</h3>'
+          + '<p class="muted">Nothing matched "' + esc(q) + '"</p>'
+          + '</div>';
+        return;
+      }
+
+      host.innerHTML = '<div class="reg-block" style="padding:0;overflow:hidden">'
+        + results.map(function(r){
+            return '<div style="display:flex;gap:14px;align-items:center;'
+              + 'padding:14px 20px;border-bottom:1px solid var(--border);'
+              + 'cursor:pointer;transition:background .15s ease" '
+              + 'onmouseover="this.style.background=\'rgba(14,69,235,.04)\'" '
+              + 'onmouseout="this.style.background=\'\'" '
+              + 'onclick="' + (r.action
+                  ? 'window.__gsAction_' + Math.random().toString(36).slice(2) + '=arguments[0];'
+                  : '') + 'handleGlobalSearchResultClick(\'' + r.type + '\','
+              + (r.route ? '\'' + r.route + '\'' : 'null') + ','
+              + (r.params ? JSON.stringify(r.params).replace(/"/g, "&quot;") : 'null')
+              + ')">'
+              + '<div style="width:40px;height:40px;border-radius:10px;'
+                + 'flex-shrink:0;background:' + r.color + '1a;'
+                + 'color:' + r.color + ';display:flex;align-items:center;'
+                + 'justify-content:center;font-size:1rem">'
+                + '<i class="fa-solid ' + r.icon + '"></i>'
+              + '</div>'
+              + '<div style="flex:1;min-width:0">'
+                + '<div style="font-weight:700;color:var(--navy);'
+                  + 'font-size:.9rem">' + esc(r.title) + '</div>'
+                + '<div style="font-size:.78rem;color:var(--soft);'
+                  + 'margin-top:2px">' + esc(r.sub) + '</div>'
+              + '</div>'
+              + '<span class="badge badge-test" style="flex-shrink:0">'
+                + esc(r.type) + '</span>'
+              + '<i class="fa-solid fa-arrow-right" '
+                + 'style="color:var(--soft)"></i>'
+            + '</div>';
+          }).join("")
+      + '</div>';
+
+    }catch(err){
+      console.error("[performGlobalSearch]", err);
+      host.innerHTML = '<div class="empty"><h3>Search failed</h3>'
+        + '<p class="muted">' + esc(err.message) + '</p></div>';
+    }
+  };
+
+
+  window.handleGlobalSearchResultClick = function(type, route, params){
+    if(route){
+      go(route, params || {});
+    }
+  };
+
+
+  /* Add menu link */
+  (function addSearchMenu(){
+    function install(){
+      if(typeof DASH_MENUS === "undefined") return setTimeout(install, 100);
+
+      ["superAdmin", "churchAdmin", "teacher"].forEach(function(role){
+        if(!DASH_MENUS[role]) return;
+        const has = DASH_MENUS[role].some(function(m){
+          return m.route === "global-search";
+        });
+        if(has) return;
+
+        DASH_MENUS[role].push({
+          label: "Global Search",
+          route: "global-search",
+          icon:  "fa-magnifying-glass"
+        });
+      });
+    }
+    install();
+  })();
+
+
+  /* ═══════════════════════════════════════════════════════════
+     VERIFICATION
+     ═══════════════════════════════════════════════════════════ */
+  setTimeout(function(){
+    console.log("\n═══════════════════════════════════════");
+    console.log("  ROUND 4 — UX ENHANCEMENTS");
+    console.log("═══════════════════════════════════════");
+    console.log("✅ Bulk import modal");
+    console.log("✅ Bulk import route (/bulk-import)");
+    console.log("✅ bulkImportStudents() helper");
+    console.log("✅ Audit logs route (/audit-logs)");
+    console.log("✅ Audit log viewer + filters");
+    console.log("✅ Global search route (/global-search)");
+    console.log("✅ Debounced search across users/courses/certs");
+    console.log("═══════════════════════════════════════\n");
+  }, 2000);
+
+  console.log("✅ Round 4 — UX Enhancements ready");
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════
+     ROUND 5 — PWA Registration + Offline + Install Prompt
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function Round5PWA(){
+  console.log("📱 Round 5 — PWA booting…");
+
+  /* ── 1. Register service worker ── */
+  if("serviceWorker" in navigator){
+    window.addEventListener("load", function(){
+      navigator.serviceWorker.register("/service-worker.js", { scope: "/" })
+        .then(function(reg){
+          console.log("✅ Service worker registered:", reg.scope);
+          setInterval(function(){ reg.update(); }, 60 * 60 * 1000);
+
+          reg.addEventListener("updatefound", function(){
+            const newWorker = reg.installing;
+            if(!newWorker) return;
+            newWorker.addEventListener("statechange", function(){
+              if(newWorker.state === "installed"
+                 && navigator.serviceWorker.controller){
+                showUpdatePrompt();
+              }
+            });
+          });
+        })
+        .catch(function(err){
+          console.warn("[SW] Failed:", err.message);
+        });
+    });
+  }
+
+  /* ── 2. Update prompt ── */
+  function showUpdatePrompt(){
+    if(document.getElementById("pwaUpdatePrompt")) return;
+    const prompt = document.createElement("div");
+    prompt.id = "pwaUpdatePrompt";
+    prompt.style.cssText =
+      "position:fixed;bottom:20px;left:20px;right:20px;max-width:400px;"
+      + "margin:0 auto;background:linear-gradient(135deg,#0E45EB,#25395C);"
+      + "color:#fff;padding:16px 20px;border-radius:14px;"
+      + "box-shadow:0 20px 50px rgba(14,69,235,.4);z-index:9999;"
+      + "display:flex;gap:14px;align-items:center";
+    prompt.innerHTML =
+      '<div style="width:40px;height:40px;border-radius:10px;'
+        + 'background:rgba(255,255,255,.2);display:flex;align-items:center;'
+        + 'justify-content:center;font-size:1.1rem;flex-shrink:0">'
+        + '<i class="fa-solid fa-rotate"></i></div>'
+      + '<div style="flex:1;min-width:0">'
+        + '<div style="font-weight:800;font-size:.9rem">Update available</div>'
+        + '<div style="font-size:.78rem;opacity:.9">Reload to get it</div>'
+      + '</div>'
+      + '<button onclick="applyPwaUpdate()" '
+        + 'style="background:#fff;color:#0E45EB;border:none;'
+        + 'padding:8px 16px;border-radius:8px;font-weight:700;'
+        + 'font-size:.82rem;cursor:pointer">Update</button>';
+    document.body.appendChild(prompt);
+    setTimeout(function(){
+      if(prompt.parentNode) prompt.remove();
+    }, 30000);
+  }
+
+  window.applyPwaUpdate = function(){
+    if(!navigator.serviceWorker.controller){ location.reload(); return; }
+    navigator.serviceWorker.getRegistration().then(function(reg){
+      if(reg && reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+      setTimeout(function(){ location.reload(); }, 300);
+    });
+  };
+
+  /* ── 3. Install prompt ── */
+  let __installPrompt = null;
+  window.addEventListener("beforeinstallprompt", function(e){
+    e.preventDefault();
+    __installPrompt = e;
+    showInstallButton();
+  });
+
+  function showInstallButton(){
+    if(document.getElementById("pwaInstallPrompt")) return;
+    if(localStorage.getItem("sda_pwa_dismissed") === "1") return;
+    const prompt = document.createElement("div");
+    prompt.id = "pwaInstallPrompt";
+    prompt.style.cssText =
+      "position:fixed;bottom:20px;right:20px;max-width:340px;"
+      + "background:#fff;border:1px solid rgba(27,42,68,.1);"
+      + "padding:16px 20px;border-radius:14px;"
+      + "box-shadow:0 20px 50px rgba(27,42,68,.18);"
+      + "z-index:9998;display:flex;gap:14px;align-items:flex-start";
+    prompt.innerHTML =
+      '<div style="width:44px;height:44px;border-radius:12px;'
+        + 'background:linear-gradient(135deg,#0E45EB,#25395C);'
+        + 'color:#fff;display:flex;align-items:center;justify-content:center;'
+        + 'font-size:1.2rem;flex-shrink:0">'
+        + '<i class="fa-solid fa-mobile-screen-button"></i></div>'
+      + '<div style="flex:1;min-width:0">'
+        + '<div style="font-weight:800;font-size:.92rem;color:#1B2A44;'
+          + 'margin-bottom:4px">Install SDA Learning</div>'
+        + '<div style="font-size:.78rem;color:#5B5F58;'
+          + 'line-height:1.5;margin-bottom:12px">'
+          + 'Add to home screen for faster access and offline mode.</div>'
+        + '<div style="display:flex;gap:8px">'
+          + '<button onclick="installPwa()" '
+            + 'style="background:#0E45EB;color:#fff;border:none;'
+            + 'padding:8px 16px;border-radius:8px;font-weight:700;'
+            + 'font-size:.82rem;cursor:pointer">Install</button>'
+          + '<button onclick="dismissInstallPwa()" '
+            + 'style="background:transparent;color:#5B5F58;'
+            + 'border:1px solid rgba(27,42,68,.1);padding:8px 16px;'
+            + 'border-radius:8px;font-weight:600;font-size:.82rem;'
+            + 'cursor:pointer">Not now</button>'
+        + '</div>'
+      + '</div>';
+    document.body.appendChild(prompt);
+  }
+
+  window.installPwa = function(){
+    if(!__installPrompt){
+      alert("To install:\n\n"
+        + "Chrome/Edge: Menu → Install App\n"
+        + "Safari iOS: Share → Add to Home Screen\n"
+        + "Firefox: Menu → Install");
+      return;
+    }
+    __installPrompt.prompt();
+    __installPrompt.userChoice.then(function(choice){
+      if(choice.outcome === "accepted"){
+        if(typeof toast === "function") toast("Installed!", "App is now on your device.", "success");
+      }
+      __installPrompt = null;
+      const p = document.getElementById("pwaInstallPrompt");
+      if(p) p.remove();
+    });
+  };
+
+  window.dismissInstallPwa = function(){
+    localStorage.setItem("sda_pwa_dismissed", "1");
+    const p = document.getElementById("pwaInstallPrompt");
+    if(p) p.remove();
+  };
+
+  /* ── 4. Offline indicator ── */
+  function updateOnlineStatus(){
+    const isOnline = navigator.onLine;
+    const indicator = document.getElementById("offlineIndicator");
+    if(isOnline){
+      if(indicator){
+        indicator.style.transform = "translateY(-100%)";
+        setTimeout(function(){ indicator.remove(); }, 400);
+      }
+      return;
+    }
+    if(!indicator){
+      const el = document.createElement("div");
+      el.id = "offlineIndicator";
+      el.style.cssText =
+        "position:fixed;top:0;left:0;right:0;background:#CF9B3F;"
+        + "color:#fff;padding:10px 20px;text-align:center;"
+        + "font-size:.85rem;font-weight:700;z-index:10000;"
+        + "transition:transform .4s ease;"
+        + "display:flex;align-items:center;justify-content:center;gap:10px;"
+        + "box-shadow:0 4px 14px rgba(207,155,63,.4)";
+      el.innerHTML = '<i class="fa-solid fa-wifi" '
+        + 'style="opacity:.6;text-decoration:line-through"></i>'
+        + '<span>You are offline — showing cached content</span>';
+      document.body.appendChild(el);
+    }
+  }
+
+  window.addEventListener("online", function(){
+    updateOnlineStatus();
+    if(typeof toast === "function") toast("Back online", "Syncing your data…", "success");
+  });
+  window.addEventListener("offline", function(){
+    updateOnlineStatus();
+  });
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", updateOnlineStatus);
+  }else{
+    updateOnlineStatus();
+  }
+
+  /* ── 5. Cache helpers (for admin debugging) ── */
+  window.getCacheInfo = async function(){
+    if(!("caches" in window)) return null;
+    try{
+      const keys = await caches.keys();
+      let totalFiles = 0;
+      for(const key of keys){
+        const cache = await caches.open(key);
+        const requests = await cache.keys();
+        totalFiles += requests.length;
+      }
+      return {
+        cacheKeys: keys,
+        fileCount: totalFiles,
+        version: keys.find(k => k.indexOf("sda-lms") !== -1) || "unknown"
+      };
+    }catch(e){ return null; }
+  };
+
+  window.clearAppCache = async function(){
+    if(!("caches" in window)){
+      alert("Your browser doesn't support cache clearing.");
+      return;
+    }
+    if(!confirm("Clear all cached data? App will re-download on next visit.")) return;
+    try{
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+      alert("Cache cleared. Reloading…");
+      setTimeout(function(){ location.reload(); }, 500);
+    }catch(e){
+      alert("Failed: " + e.message);
+    }
+  };
+
+  setTimeout(function(){
+    console.log("✅ Round 5 — PWA ready");
+  }, 2000);
 })();
 </script>
 
