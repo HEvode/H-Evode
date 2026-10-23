@@ -5185,7 +5185,7 @@ ROUTES.home.after = function(){
         const coverSrc = a.coverImageUrl || null;
         const coverHTML = coverSrc
           ? '<img src="' + esc(coverSrc) + '" alt="" '
-            + 'style="width:100%;height:100%;object-fit:cover">'
+            + 'style="width:100%;height:100%;object-fit:contain;background:#fff">'
           : '<div class="ph-img" style="font-size:2.4rem;'
             + 'background:linear-gradient(135deg,#CF9B3F,#E7C583)">'
             + '<i class="fa-solid fa-bullhorn"></i></div>';
@@ -6752,7 +6752,8 @@ const DASH_MENUS = {
     { label:"My Grades",       route:"student-marks",        icon:"fa-chart-line" },
     { label:"Quizzes",         route:"student-quizzes",      icon:"fa-circle-question" },
     { label:"Forums",          route:"student-forum",        icon:"fa-comments" },
-    { label:"My Certificates", route:"student-certificates", icon:"fa-award" }
+    { label:"My Certificates", route:"student-certificates", icon:"fa-award" },
+    { label:"Academic Records", route:"academic-records", icon:"fa-graduation-cap" }
   ],
   teacher: [
     { label:"Dashboard",       route:"portal-teacher",       icon:"fa-house" },
@@ -6770,6 +6771,7 @@ const DASH_MENUS = {
     { label:"Dashboard",       route:"portal-churchAdmin",   icon:"fa-house" },
     { label:"Church Courses",  route:"admin-courses",        icon:"fa-book" },
     { label:"Applications",    route:"admin-applications",   icon:"fa-clipboard-check" },
+    { label:"Academic Records",route:"academic-records",     icon:"fa-graduation-cap" },
     { label:"User Approvals",  route:"user-approvals",       icon:"fa-user-check" },
     { label:"Departments",     route:"departments",          icon:"fa-sitemap" },
     { label:"Assignments",     route:"teacher-assignments",  icon:"fa-clipboard-list" },
@@ -6784,6 +6786,7 @@ const DASH_MENUS = {
     { label:"Dashboard",       route:"portal-superAdmin",    icon:"fa-house" },
     { label:"Approvals",       route:"admin-applications",   icon:"fa-clipboard-check" },
     { label:"User Management", route:"super-users",          icon:"fa-users-gear" },
+    { label:"Academic Records",route:"academic-records",     icon:"fa-graduation-cap" },
     { label:"Church Approvals",route:"church-approvals",     icon:"fa-church" },
     { label:"Manage Churches", route:"super-churches",       icon:"fa-place-of-worship" },
     { label:"Church Courses",  route:"admin-courses",        icon:"fa-book" },
@@ -11273,15 +11276,41 @@ async function submitRegisterAccount(form){
       console.warn("[reg notify]", e.message);
     }
 
+    /* Send email verification BEFORE signing out of the newly created account. */
+    let verificationSent = false;
+    try{
+      const authUser = FB.auth.currentUser;
+      if(authUser && authUser.uid === newUid && !authUser.emailVerified){
+        await authUser.sendEmailVerification({
+          url: location.origin + location.pathname + "#verify-email",
+          handleCodeInApp: false
+        });
+        verificationSent = true;
+        await userRef.update({
+          emailVerified: false,
+          verificationSentAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }else if(authUser && authUser.uid === newUid && authUser.emailVerified){
+        verificationSent = true;
+      }
+    }catch(verificationError){
+      console.error("[registration verification email]", verificationError);
+    }
+
+    /* Keep only the pending email (not credentials) so the signed-out
+       verification page can tell the user which inbox to check. */
+    try{ localStorage.setItem("sda_pending_verification_email", email); }catch(e){}
+
     try{ await FB.auth.signOut(); }catch(e){}
     sessionStorage.removeItem("sda_session");
     localStorage.removeItem("sda_session");
 
-    /* Show success popup */
+    /* Show success popup with clear verification instructions */
     showStudentSubmittedPopup({
       name: name,
       email: email,
-      churchName: churchRecord ? churchRecord.name : churchId
+      churchName: churchRecord ? churchRecord.name : churchId,
+      verificationSent: verificationSent
     });
 
     toast("Account submitted",
@@ -11374,9 +11403,12 @@ window.showStudentSubmittedPopup = function(data){
                 + 'line-height:1.5">'
                 + '<i class="fa-solid fa-circle-info"></i> '
                 + '<strong>What happens next?</strong><br>'
-                + 'Your church admin will see your registration in '
-                + 'their <em>User Approvals</em> page.<br>'
-                + 'Once approved, you can sign in immediately.'
+                + (data.verificationSent
+                    ? 'A verification email was sent to <strong>' + esc(data.email)
+                      + '</strong>. Open your inbox (and Spam folder) and click the verification link.<br>'
+                    : 'Your registration was saved, but the verification email could not be confirmed as sent. '
+                      + 'Please contact support or use the verification resend option from the sign-in flow.<br>')
+                + 'Your church admin will also review your registration. Email verification and church approval may both be required before learning access is enabled.'
               + '</div>'
             + '</div>'
 
@@ -31602,19 +31634,7 @@ window.clearRecentAccounts = clearRecentAccounts;
       + '<i class="fa-solid fa-xmark"></i>'
     + '</button>'
   + '</div>';
-}).join("");
-          + '<div class="ra-avatar">'
-            + (a.photoURL
-                ? '<img src="' + esc(a.photoURL) + '" alt="">'
-                : (a.name || a.email).slice(0,2).toUpperCase())
-          + '</div>'
-          + '<div class="ra-body">'
-            + '<div class="ra-name">' + esc(a.name) + '</div>'
-            + '<div class="ra-email">' + esc(a.email) + '</div>'
-          + '</div>'
-          + '<i class="fa-solid fa-arrow-right ra-arrow"></i>'
-        + '</button>';
-      }).join("");
+ }).join("");
 
       const section = '<div class="recent-accounts-block" '
         + 'style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border)">'
@@ -32094,15 +32114,25 @@ async function getVisibleCoursesForTeacher(){
 
     try{
       const snap = await FB.db.collection("teacherAssignments")
-        .where("teacherEmail", "==", u.user.toLowerCase())
-        .limit(1).get();
+        .where("teacherEmail", "==", u.user.toLowerCase()).get();
       if(snap.empty) return own;
 
-      const a = snap.docs[0].data();
-      const courseIds = a.courseIds || [];
-      const deptIds   = a.departmentIds || [];
+      const courseIds = [];
+      const deptIds = [];
+      snap.docs.forEach(function(doc){
+        const a = doc.data() || {};
+        (Array.isArray(a.courseIds) ? a.courseIds : []).forEach(function(id){
+          if(id && courseIds.indexOf(id) === -1) courseIds.push(id);
+        });
+        (Array.isArray(a.departmentIds) ? a.departmentIds : []).forEach(function(id){
+          if(id && deptIds.indexOf(id) === -1) deptIds.push(id);
+        });
+        if(a.courseId && courseIds.indexOf(a.courseId) === -1) courseIds.push(a.courseId);
+        if(a.departmentId && deptIds.indexOf(a.departmentId) === -1) deptIds.push(a.departmentId);
+      });
 
       const assigned = all.filter(function(c){
+        if(u.churchId && c.churchId && c.churchId !== u.churchId) return false;
         if(courseIds.indexOf(c.id) !== -1) return true;
         if(c.departmentId && deptIds.indexOf(c.departmentId) !== -1) return true;
         return false;
@@ -47285,7 +47315,7 @@ console.log("✅ Project decision override + admin view loaded");
                       + 'color:var(--soft);font-size:.88rem">'
                       + '<span class="loader" style="border-top-color:var(--primary);'
                         + 'width:14px;height:14px"></span> '
-                      + 'Loading departments…</div>'))
+                      + 'Loading departments…</div>')))
       + '</div>'
 
       /* ── COURSE SELECTOR (unchanged) ── */
@@ -54066,20 +54096,8 @@ body.mobile-menu-open {
   /* ═══════════════════════════════════════════════════════════
      4. OVERRIDE submitCertificatePreparation — with duplicate check
      ═══════════════════════════════════════════════════════════ */
-  function patchSubmitCert(){
-    if(typeof window.submitCertificatePreparation !== "function"){
-      return setTimeout(patchSubmitCert, 100);
-    }
-    if(window.__submitCertPatched) return;
-    window.__submitCertPatched = true;
-
-    const _orig = window.submitCertificatePreparation;
-
-    
-    };
-
-  }
-  patchSubmitCert();
+  /* Removed an incomplete duplicate-submit wrapper that caused a syntax error.
+     The certificate modal and save flow below remain the canonical handlers. */
 
   /* ═══════════════════════════════════════════════════════════
      5. Full re-implementation of prepare modal
@@ -54421,6 +54439,31 @@ body.mobile-menu-open {
       throw new Error("Maximum size is 5 MB");
     }
 
+    /* Certificate backgrounds must be landscape and close to A4 landscape
+       so the exported PDF does not distort the artwork. */
+    const imageDimensions = await new Promise(function(resolve, reject){
+      const probe = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      probe.onload = function(){
+        const dimensions = { width: probe.naturalWidth, height: probe.naturalHeight };
+        URL.revokeObjectURL(objectUrl);
+        resolve(dimensions);
+      };
+      probe.onerror = function(){
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("Could not read the certificate image."));
+      };
+      probe.src = objectUrl;
+    });
+    const imageRatio = imageDimensions.width / imageDimensions.height;
+    const a4LandscapeRatio = 3508 / 2480;
+    if(imageDimensions.width <= imageDimensions.height){
+      throw new Error("Please upload a landscape certificate image, not a portrait image.");
+    }
+    if(Math.abs(imageRatio - a4LandscapeRatio) > 0.06){
+      throw new Error("Use an A4 landscape certificate image (about 1.414:1 ratio). This prevents stretching or cropping.");
+    }
+
     const u = currentUser();
     if(!u || u.role !== "superAdmin"){
       throw new Error("Only Super Admin can upload templates");
@@ -54437,7 +54480,7 @@ body.mobile-menu-open {
       canvasWidth:        3508,
       canvasHeight:       2480,
       textZones:          getDefaultTextZones(),
-      qrZone:             { x: 2800, y: 2000, size: 300 },
+      qrZone:             { x: 3150, y: 2020, size: 250 },
       signatures:         getDefaultSignatures(),
       gradingScale:       getDefaultGradingScale(),
       createdBy:          u.user,
@@ -54579,7 +54622,7 @@ body.mobile-menu-open {
       host.innerHTML = '<div class="grid grid-2">'
         + templates.map(function(tpl){
             return '<div class="reg-block" style="padding:0;overflow:hidden">'
-              + '<div style="aspect-ratio:16/11;background:#F7FAFF;'
+              + '<div style="aspect-ratio:3508/2480;background:#F7FAFF;'
                 + 'border-bottom:1px solid var(--border);overflow:hidden">'
                 + '<img src="' + esc(tpl.backgroundImageUrl) + '" '
                   + 'style="width:100%;height:100%;object-fit:cover">'
@@ -54686,7 +54729,7 @@ body.mobile-menu-open {
       const prev = document.getElementById("uploadTplPreview");
       if(prev){
         prev.innerHTML = '<img src="' + e.target.result + '" '
-          + 'style="width:100%;height:100%;object-fit:cover">';
+          + 'style="width:100%;height:100%;object-fit:contain;background:#fff">';
       }
     };
     reader.readAsDataURL(file);
@@ -54977,7 +55020,7 @@ body.mobile-menu-open {
               + '<div style="position:relative;width:' + W + 'px;height:' + H + 'px;'
                 + 'margin:0 auto;background:#fff;box-shadow:0 10px 40px rgba(0,0,0,.15)">'
                 + '<img src="' + esc(tpl.backgroundImageUrl) + '" '
-                  + 'style="width:100%;height:100%;object-fit:cover;display:block">'
+                  + 'style="width:100%;height:100%;object-fit:contain;background:#fff;display:block">'
                 + zonesHTML
                 + qrHTML
                 + sigHTML
@@ -55050,7 +55093,11 @@ body.mobile-menu-open {
       const val = zoneValue(z.id);
       if(!val) return;
 
-      doc.setFont(z.fontFamily || "helvetica", z.fontWeight === "bold" ? "bold" : "normal");
+      const requestedFont = String(z.fontFamily || "").toLowerCase();
+      const pdfFont = (requestedFont.includes("georgia") || requestedFont.includes("serif"))
+        ? "times"
+        : (requestedFont.includes("courier") ? "courier" : "helvetica");
+      doc.setFont(pdfFont, z.fontWeight === "bold" ? "bold" : "normal");
       doc.setFontSize(z.fontSize);
 
       /* Color — hex to RGB */
@@ -55063,7 +55110,17 @@ body.mobile-menu-open {
               : align === 'right'  ? z.x + z.width
               : z.x;
 
+      /* Fit long names/course titles inside the configured zone. */
+      const originalFontSize = z.fontSize;
+      const safeWidth = Math.max(20, z.width - 12);
+      let fittedFontSize = originalFontSize;
+      doc.setFontSize(fittedFontSize);
+      while(fittedFontSize > 10 && doc.getTextWidth(String(val)) > safeWidth){
+        fittedFontSize -= 1;
+        doc.setFontSize(fittedFontSize);
+      }
       doc.text(String(val), x, z.y + z.height * 0.75, { align: align });
+      doc.setFontSize(originalFontSize);
     });
 
     /* Draw QR code */
@@ -56132,7 +56189,7 @@ body.mobile-menu-open {
       canvasWidth:        3508,
       canvasHeight:       2480,
       textZones:          getDefaultTextZones(),
-      qrZone:             { x: 2800, y: 2000, size: 300 },
+      qrZone:             { x: 3150, y: 2020, size: 250 },
       logoZone:           null,
       signatures:         getDefaultSignatures(),
       gradingScale:       getDefaultGradingScale(),
@@ -56759,7 +56816,14 @@ body.mobile-menu-open {
 
     const zonesHTML = tpl.textZones.map(function(z){
       let val = zoneValue(z.id);
-      const style = zoneCSS(z) + (z.id === 'marksLine'
+      const estimatedMaxChars = Math.max(8, Math.floor(z.width / Math.max(1, z.fontSize * 0.56)));
+      const previewFontSize = val && val.length > estimatedMaxChars
+        ? Math.max(10, z.fontSize * estimatedMaxChars / val.length)
+        : z.fontSize;
+      const style = zoneCSS(z).replace(
+          'font-size:' + (z.fontSize * scale) + 'px;',
+          'font-size:' + (previewFontSize * scale) + 'px;'
+        ) + (z.id === 'marksLine'
         ? 'color:' + data.classification.color + ';'
         : '');
       return '<div style="' + style + '">' + esc(val) + '</div>';
@@ -56915,8 +56979,11 @@ body.mobile-menu-open {
       const val = zoneValue(z.id);
       if(!val) return;
 
-      doc.setFont(z.fontFamily || "helvetica", 
-        z.fontWeight === "bold" ? "bold" : "normal");
+      const requestedFont = String(z.fontFamily || "").toLowerCase();
+      const pdfFont = (requestedFont.includes("georgia") || requestedFont.includes("serif"))
+        ? "times"
+        : (requestedFont.includes("courier") ? "courier" : "helvetica");
+      doc.setFont(pdfFont, z.fontWeight === "bold" ? "bold" : "normal");
       doc.setFontSize(z.fontSize);
 
       const hex = z.id === 'marksLine' ? data.classification.color : z.color;
@@ -56928,7 +56995,17 @@ body.mobile-menu-open {
               : align === 'right'  ? z.x + z.width
               : z.x;
 
+      /* Fit long names/course titles inside the configured zone. */
+      const originalFontSize = z.fontSize;
+      const safeWidth = Math.max(20, z.width - 12);
+      let fittedFontSize = originalFontSize;
+      doc.setFontSize(fittedFontSize);
+      while(fittedFontSize > 10 && doc.getTextWidth(String(val)) > safeWidth){
+        fittedFontSize -= 1;
+        doc.setFontSize(fittedFontSize);
+      }
       doc.text(String(val), x, z.y + z.height * 0.75, { align: align });
+      doc.setFontSize(originalFontSize);
     });
 
     /* QR code */
@@ -57972,7 +58049,7 @@ body.mobile-menu-open {
       canvasWidth:        3508,
       canvasHeight:       2480,
       textZones:          getDefaultTextZonesForPatch(),
-      qrZone:             { x: 2800, y: 2000, size: 300 },
+      qrZone:             { x: 3150, y: 2020, size: 250 },
       logoZone:           null,
       signatures:         getDefaultSignaturesForPatch(),
       gradingScale:       getDefaultGradingScaleForPatch(),
@@ -59728,8 +59805,13 @@ body.mobile-menu-open {
           verifiedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       }catch(e){}
+      try{
+        if((localStorage.getItem("sda_pending_verification_email") || "").toLowerCase() === (fbUser.email || "").toLowerCase()){
+          localStorage.removeItem("sda_pending_verification_email");
+        }
+      }catch(e){}
 
-      toast("✅ Email verified!", "Your account is now fully active.", "success");
+      toast("✅ Email verified!", "Your email is verified. Church approval may still be required before learning features are available.", "success");
       return true;
     }
 
@@ -59795,7 +59877,7 @@ body.mobile-menu-open {
                   + 'border-radius:12px;padding:14px 20px;margin-bottom:20px;'
                   + 'font-family:monospace;font-weight:700;'
                   + 'color:var(--primary);word-break:break-all">'
-                  + (fbUser ? esc(fbUser.email) : "—")
+                  + (fbUser ? esc(fbUser.email) : esc(localStorage.getItem("sda_pending_verification_email") || "Sign in to continue"))
                 + '</div>'
 
                 + '<p class="muted" style="font-size:.85rem;line-height:1.6;'
@@ -59842,6 +59924,11 @@ body.mobile-menu-open {
   window.checkVerificationStatus = async function(){
     const btn = document.getElementById("checkVerifyBtn");
     if(!btn) return;
+    if(!FB.auth.currentUser){
+      toast("Sign in to check", "After clicking the link in your inbox, sign in with the same account. We will then check the verification status.", "info");
+      go("login");
+      return;
+    }
 
     const original = btn.innerHTML;
     btn.disabled = true;
@@ -59882,6 +59969,11 @@ body.mobile-menu-open {
   window.resendVerificationLink = async function(){
     const btn = document.getElementById("resendVerifyBtn");
     if(!btn) return;
+    if(!FB.auth.currentUser){
+      toast("Sign in to resend", "For account security, sign in with the account that needs verification, then use Resend verification link.", "info");
+      go("login");
+      return;
+    }
 
     const original = btn.innerHTML;
     btn.disabled = true;
@@ -61632,6 +61724,212 @@ console.log("✅ Multi-language helpers loaded");
 </script>
 
 
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   SDA LEARNING PLATFORM — ACADEMIC YEARS & STUDENT RECORDS
+   Collections: academicYears, academicRecords
+   Admin deletion requires explicit confirmation.
+   ═══════════════════════════════════════════════════════════════════ */
+(function(){
+  const escA = (v) => (typeof esc === "function" ? esc(String(v == null ? "" : v)) : String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])));
+  const dbA = () => window.FB && FB.db;
+  const userA = () => typeof currentUser === "function" ? currentUser() : null;
+  const isAdminA = u => !!u && (u.role === "superAdmin" || u.role === "churchAdmin");
+  const churchA = u => u && (u.churchId || (typeof getCurrentChurchId === "function" ? getCurrentChurchId() : "")) || "";
+  const dateA = v => {
+    if(!v) return "—";
+    if(v.toDate) v = v.toDate();
+    const d = v instanceof Date ? v : new Date(v);
+    return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleDateString();
+  };
+  const statusA = s => String(s || "ACTIVE").toUpperCase();
+  const errA = e => escA(e && e.message ? e.message : e);
+
+  ROUTES["academic-records"] = function(){
+    const u = userA();
+    if(!u){ setTimeout(function(){ go("login"); }, 40); return '<section class="section container"><div class="empty"><h3>Please sign in to view academic records.</h3></div></section>'; }
+    if(!isAdminA(u) && u.role !== "student"){
+      return '<section class="section container"><div class="empty"><h3>Academic records are available to students and authorized administrators.</h3></div></section>';
+    }
+    setTimeout(loadAcademicRecordsA, 30);
+    return '<section class="section container"><div id="academicRecordsHost"><div class="empty" style="padding:60px 20px"><span class="loader"></span><h3>Loading academic records…</h3></div></div></section>';
+  };
+
+  async function loadAcademicRecordsA(message){
+    const host = document.getElementById("academicRecordsHost");
+    if(!host) return;
+    const u = userA(), db = dbA();
+    if(!u || !db){ host.innerHTML = '<div class="empty"><h3>Firebase is not ready. Please refresh and try again.</h3></div>'; return; }
+    const admin = isAdminA(u), churchId = churchA(u);
+    if(u.role === "churchAdmin" && !churchId){ host.innerHTML = '<div class="empty"><h3>Your administrator account is not assigned to a church.</h3></div>'; return; }
+    host.innerHTML = '<div class="role-panel" style="--panel-accent:#1B2A44;margin-bottom:18px"><div class="role-panel-head"><h2><i class="fa-solid fa-graduation-cap"></i> Academic Years & Student Records</h2></div><p class="muted">Manage year-by-year academic history. Permanent deletion removes the selected record and cannot be undone.</p>' + (message ? '<p role="status" style="color:#137547">'+escA(message)+'</p>' : '') + '</div><div id="academicRecordsBody"><div class="empty"><span class="loader"></span><p>Loading…</p></div></div>';
+    try{
+      let yearsQuery = db.collection("academicYears");
+      let recordsQuery = db.collection("academicRecords");
+      if(u.role === "churchAdmin") { yearsQuery = yearsQuery.where("churchId","==",churchId); recordsQuery = recordsQuery.where("churchId","==",churchId); }
+      if(u.role === "student") { yearsQuery = yearsQuery.where("churchId","==",churchId || ""); recordsQuery = recordsQuery.where("studentUid","==",u.uid || (FB.auth.currentUser && FB.auth.currentUser.uid)); }
+      const [ys, rs] = await Promise.all([yearsQuery.get(), recordsQuery.get()]);
+      let years = ys.docs.map(d => Object.assign({id:d.id},d.data()));
+      let records = rs.docs.map(d => Object.assign({id:d.id},d.data()));
+      if(u.role === "student") {
+        years = years.filter(y => !y.churchId || y.churchId === churchId);
+        records = records.filter(r => r.studentUid === (u.uid || (FB.auth.currentUser && FB.auth.currentUser.uid)));
+      }
+      years.sort((a,b) => String(b.name || b.yearLabel || "").localeCompare(String(a.name || a.yearLabel || "")));
+      records.sort((a,b) => String(b.academicYearName || "").localeCompare(String(a.academicYearName || "")) || String(a.studentName || "").localeCompare(String(b.studentName || "")));
+      const body = document.getElementById("academicRecordsBody"); if(!body) return;
+      const yearRows = years.length ? years.map(y => '<tr><td><strong>'+escA(y.name || y.yearLabel || y.id)+'</strong></td><td>'+escA(dateA(y.startDate))+' – '+escA(dateA(y.endDate))+'</td><td>'+escA(statusA(y.status))+'</td><td>'+records.filter(r=>r.academicYearId===y.id).length+'</td>'+(admin?'<td><button class="btn btn-sm" onclick="editAcademicYearA(\''+escA(y.id)+'\')"><i class="fa-solid fa-pen"></i> Edit</button> <button class="btn btn-sm" style="color:#b42318" onclick="deleteAcademicYearA(\''+escA(y.id)+'\')"><i class="fa-solid fa-trash"></i> Delete</button></td>':'')+'</tr>').join("") : '<tr><td colspan="5" class="muted">No academic years recorded yet.</td></tr>';
+      const recordRows = records.length ? records.map(r => '<tr><td>'+escA(r.academicYearName || years.find(y=>y.id===r.academicYearId)?.name || r.academicYearId || "—")+'</td><td>'+escA(r.studentName || "—")+'<div class="muted" style="font-size:.82rem">'+escA(r.studentEmail || r.studentUid || "")+'</div></td><td>'+escA(r.courseName || r.courseId || "—")+'</td><td>'+escA(r.grade == null ? (r.score == null ? "—" : r.score) : r.grade)+'</td><td>'+escA(statusA(r.status))+'</td>'+(admin?'<td><button class="btn btn-sm" onclick="editAcademicRecordA(\''+escA(r.id)+'\')"><i class="fa-solid fa-pen"></i> Edit</button> <button class="btn btn-sm" style="color:#b42318" onclick="deleteAcademicRecordA(\''+escA(r.id)+'\')"><i class="fa-solid fa-trash"></i> Delete</button></td>':'')+'</tr>').join("") : '<tr><td colspan="6" class="muted">No student academic records found.</td></tr>';
+      body.innerHTML = (admin ? '<div class="role-panel" style="margin-bottom:18px"><div class="role-panel-head"><h3><i class="fa-solid fa-calendar-days"></i> Academic years</h3><button class="btn btn-solid" onclick="showAcademicYearFormA()"><i class="fa-solid fa-plus"></i> Add Academic Year</button></div><div id="academicYearFormHost"></div>' : '')
+        + '<div class="role-panel" style="margin-bottom:18px"><div class="role-panel-head"><h3>Academic-year register</h3></div><div style="overflow:auto"><table class="table" style="width:100%;border-collapse:collapse"><thead><tr><th>Year</th><th>Dates</th><th>Status</th><th>Records</th>'+(admin?'<th>Actions</th>':'')+'</tr></thead><tbody>'+yearRows+'</tbody></table></div></div>'
+        + (admin ? '<div class="role-panel" style="margin-bottom:18px"><div class="role-panel-head"><h3><i class="fa-solid fa-user-graduate"></i> Student academic records</h3><button class="btn btn-solid" onclick="showAcademicRecordFormA()"><i class="fa-solid fa-plus"></i> Add Student Record</button></div><p class="muted">Use the student’s Firebase UID so the record is securely linked to their account.</p><div id="academicRecordFormHost"></div>' : '<div class="role-panel" style="margin-bottom:18px"><div class="role-panel-head"><h3><i class="fa-solid fa-user-graduate"></i> My academic records</h3></div>')
+        + '<div style="overflow:auto"><table class="table" style="width:100%;border-collapse:collapse"><thead><tr><th>Academic year</th><th>Student</th><th>Course / subject</th><th>Grade / score</th><th>Status</th>'+(admin?'<th>Actions</th>':'')+'</tr></thead><tbody>'+recordRows+'</tbody></table></div></div>';
+    }catch(e){ console.error("[academic-records]",e); const body=document.getElementById("academicRecordsBody"); if(body) body.innerHTML='<div class="empty"><h3>Could not load academic records</h3><p>'+errA(e)+'</p><button class="btn btn-solid" onclick="loadAcademicRecordsA()">Retry</button></div>'; }
+  }
+  window.loadAcademicRecordsA = loadAcademicRecordsA;
+
+  window.showAcademicYearFormA = function(id){
+    const host=document.getElementById("academicYearFormHost"); if(!host) return;
+    host.innerHTML='<form onsubmit="saveAcademicYearA(event,\''+(id||'')+'\')" class="form-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;padding:12px 0">'
+      + '<label>Academic year name<input class="form-control" name="name" placeholder="2026–2027" required maxlength="40"></label>'
+      + '<label>Start date<input class="form-control" name="startDate" type="date" required></label>'
+      + '<label>End date<input class="form-control" name="endDate" type="date" required></label>'
+      + '<label>Status<select class="form-control" name="status"><option value="ACTIVE">ACTIVE</option><option value="COMPLETED">COMPLETED</option><option value="INACTIVE">INACTIVE</option></select></label>'
+      + (userA().role==='superAdmin'?'<label>Church ID (leave blank for platform-wide)<input class="form-control" name="churchId" placeholder="Firestore church document ID"></label>':'')
+      + '<div style="display:flex;gap:8px;align-items:end"><button class="btn btn-solid" type="submit">Save Academic Year</button><button class="btn" type="button" onclick="document.getElementById(\'academicYearFormHost\').innerHTML=\'\'">Cancel</button></div></form>';
+    if(id) { dbA().collection("academicYears").doc(id).get().then(s=>{if(!s.exists)return; const f=host.querySelector('form'); if(!f)return; const d=s.data(); ['name','startDate','endDate','status','churchId'].forEach(k=>{if(f.elements[k]) f.elements[k].value=d[k]||'';}); }).catch(e=>alert('Could not load academic year: '+e.message)); }
+  };
+  window.editAcademicYearA = id => window.showAcademicYearFormA(id);
+  window.saveAcademicYearA = async function(ev,id){
+    ev.preventDefault(); const f=ev.target, u=userA(), db=dbA(); if(!isAdminA(u)) return alert('Administrator permission required.');
+    const name=f.elements.name.value.trim(), startDate=f.elements.startDate.value, endDate=f.elements.endDate.value;
+    if(!name || !startDate || !endDate || endDate < startDate) return alert('Enter a valid academic year name and date range.');
+    const churchId = u.role==='superAdmin' ? (f.elements.churchId ? f.elements.churchId.value.trim() : '') : churchA(u);
+    const payload={name,startDate,endDate,status:f.elements.status.value,churchId,updatedAt:firebase.firestore.FieldValue.serverTimestamp()};
+    if(!id) payload.createdAt=firebase.firestore.FieldValue.serverTimestamp();
+    try{ if(id) await db.collection('academicYears').doc(id).set(payload,{merge:true}); else await db.collection('academicYears').add(payload); await loadAcademicRecordsA('Academic year saved.'); }
+    catch(e){ alert('Could not save academic year: '+e.message); }
+  };
+  window.deleteAcademicYearA = async function(id){
+    const u=userA(); if(!isAdminA(u)) return alert('Administrator permission required.');
+    if(!confirm('Permanently delete this academic year and ALL student academic records linked to it? This cannot be undone.')) return;
+    const db=dbA(); try{
+      const yearSnap=await db.collection('academicYears').doc(id).get(); if(!yearSnap.exists) return alert('Academic year no longer exists.');
+      const y=yearSnap.data(); if(u.role==='churchAdmin' && y.churchId!==churchA(u)) return alert('You cannot delete another church’s academic year.');
+      let q=db.collection('academicRecords').where('academicYearId','==',id);
+      if(u.role==='churchAdmin') q=q.where('churchId','==',churchA(u));
+      const snap=await q.get(); const docs=snap.docs;
+      for(let i=0;i<docs.length;i+=400){ const batch=db.batch(); docs.slice(i,i+400).forEach(d=>batch.delete(d.ref)); await batch.commit(); }
+      await db.collection('academicYears').doc(id).delete();
+      await loadAcademicRecordsA('Academic year and '+docs.length+' linked record(s) permanently deleted.');
+    }catch(e){ alert('Deletion failed. Some linked records may already have been deleted. Check Firestore and try again. Details: '+e.message); }
+  };
+
+  window.showAcademicRecordFormA = function(id){
+    const host=document.getElementById('academicRecordFormHost'); if(!host) return;
+    const u=userA(); if(!isAdminA(u)) return alert('Administrator permission required.');
+    const db=dbA();
+    host.innerHTML='<form onsubmit="saveAcademicRecordA(event,\''+(id||'')+'\')" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;padding:12px 0">'
+      + '<label>Academic year<select class="form-control" name="academicYearId" required><option value="">Loading years…</option></select></label>'
+      + '<label>Student Firebase UID<input class="form-control" name="studentUid" required placeholder="Firebase Authentication UID"></label>'
+      + '<label>Student full name<input class="form-control" name="studentName" required maxlength="160"></label>'
+      + '<label>Student email<input class="form-control" name="studentEmail" type="email" required></label>'
+      + '<label>Course / subject<input class="form-control" name="courseName" required maxlength="160"></label>'
+      + '<label>Course ID (optional)<input class="form-control" name="courseId" maxlength="160"></label>'
+      + '<label>Grade / score<input class="form-control" name="grade" placeholder="e.g. A, Distinction, 87%"></label>'
+      + '<label>Attendance (%)<input class="form-control" name="attendance" type="number" min="0" max="100" step="0.1"></label>'
+      + '<label>Status<select class="form-control" name="status"><option>ACTIVE</option><option>COMPLETED</option><option>IN_PROGRESS</option><option>INCOMPLETE</option></select></label>'
+      + '<label style="grid-column:1/-1">Notes<textarea class="form-control" name="notes" rows="2" maxlength="3000"></textarea></label>'
+      + '<div style="display:flex;gap:8px;align-items:end"><button class="btn btn-solid" type="submit">Save Student Record</button><button class="btn" type="button" onclick="document.getElementById(\'academicRecordFormHost\').innerHTML=\'\'">Cancel</button></div></form>';
+    let q=db.collection('academicYears'); if(u.role==='churchAdmin') q=q.where('churchId','==',churchA(u));
+    q.get().then(snap=>{const sel=host.querySelector('[name="academicYearId"]'); if(!sel)return; const years=snap.docs.map(d=>({id:d.id,...d.data()})); sel.innerHTML='<option value="">Choose academic year</option>'+years.map(y=>'<option value="'+escA(y.id)+'">'+escA(y.name||y.id)+'</option>').join(''); if(id) db.collection('academicRecords').doc(id).get().then(r=>{if(!r.exists)return;const d=r.data(),f=host.querySelector('form'); if(!f)return; ['academicYearId','studentUid','studentName','studentEmail','courseName','courseId','grade','attendance','status','notes'].forEach(k=>{if(f.elements[k])f.elements[k].value=d[k]==null?'':d[k];});}); }).catch(e=>alert('Could not load academic years: '+e.message));
+  };
+  window.editAcademicRecordA = id => window.showAcademicRecordFormA(id);
+  window.saveAcademicRecordA = async function(ev,id){
+    ev.preventDefault(); const u=userA(), f=ev.target, db=dbA(); if(!isAdminA(u)) return alert('Administrator permission required.');
+    const yearId=f.elements.academicYearId.value; const uid=f.elements.studentUid.value.trim(); const studentName=f.elements.studentName.value.trim(); const studentEmail=f.elements.studentEmail.value.trim().toLowerCase();
+    if(!yearId||!uid||!studentName||!studentEmail) return alert('Complete the required student and academic-year fields.');
+    try{
+      const ySnap=await db.collection('academicYears').doc(yearId).get(); if(!ySnap.exists) return alert('Selected academic year was not found.'); const y=ySnap.data();
+      if(u.role==='churchAdmin' && y.churchId!==churchA(u)) return alert('You cannot add records to another church’s academic year.');
+      const attendanceRaw=f.elements.attendance.value;
+      const payload={academicYearId:yearId,academicYearName:y.name||yearId,studentUid:uid,studentName,studentEmail,courseName:f.elements.courseName.value.trim(),courseId:f.elements.courseId.value.trim(),grade:f.elements.grade.value.trim(),attendance:attendanceRaw===''?null:Number(attendanceRaw),status:f.elements.status.value,notes:f.elements.notes.value.trim(),churchId:y.churchId||'',updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:(u.user||u.email||'')};
+      if(!id){payload.createdAt=firebase.firestore.FieldValue.serverTimestamp();payload.createdBy=(u.user||u.email||'');}
+      if(id){const old=await db.collection('academicRecords').doc(id).get(); if(!old.exists) return alert('Record no longer exists.'); if(u.role==='churchAdmin'&&old.data().churchId!==churchA(u))return alert('You cannot edit another church’s record.'); await db.collection('academicRecords').doc(id).set(payload,{merge:true});}
+      else await db.collection('academicRecords').add(payload);
+      await loadAcademicRecordsA('Student academic record saved.');
+    }catch(e){alert('Could not save student record: '+e.message);}
+  };
+  window.deleteAcademicRecordA = async function(id){
+    const u=userA(); if(!isAdminA(u)) return alert('Administrator permission required.');
+    if(!confirm('Permanently delete this student academic record? This cannot be undone.')) return;
+    try{const ref=dbA().collection('academicRecords').doc(id), snap=await ref.get(); if(!snap.exists)return alert('Record no longer exists.'); if(u.role==='churchAdmin'&&snap.data().churchId!==churchA(u))return alert('You cannot delete another church’s record.'); await ref.delete(); await loadAcademicRecordsA('Student academic record permanently deleted.');}
+    catch(e){alert('Could not delete record: '+e.message);}
+  };
+})();
+</script>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     ROLE NAVIGATION POLICY — activity work belongs to local teams
+     Super Admin manages platform/churches/roles; Teachers and Church
+     Admins manage day-to-day learning activities within their church.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function SDAFinalRoleNavigationPolicy(){
+  const SUPER_ADMIN_ACTIVITY_ROUTES = new Set([
+    "teacher-gradebook", "teacher-f2f", "teacher-f2f-detail",
+    "teacher-projects", "teacher-final-projects",
+    "teacher-attendance", "teacher-attendance-session",
+    "attendance-report", "teacher-attendance-report",
+    "final-projects", "face-to-face-marks", "gradebook"
+  ]);
+  const ACTIVITY_LABEL = /^(final projects|grade book|gradebook|face-to-face marks|attendance report|attendance|teacher projects)$/i;
+
+  function applyPolicy(){
+    if(typeof DASH_MENUS === "undefined") return false;
+    if(Array.isArray(DASH_MENUS.superAdmin)){
+      DASH_MENUS.superAdmin = DASH_MENUS.superAdmin.filter(function(item){
+        const route = String(item && item.route || "").toLowerCase();
+        const label = String(item && item.label || "").trim();
+        return !SUPER_ADMIN_ACTIVITY_ROUTES.has(route) && !ACTIVITY_LABEL.test(label);
+      });
+    }
+    return true;
+  }
+  applyPolicy();
+
+  /* Guard these screens as well as hiding their links. This is a UI-level
+     safeguard only; matching Firestore Security Rules are still required. */
+  function wrapRoutes(){
+    if(typeof ROUTES === "undefined") return false;
+    SUPER_ADMIN_ACTIVITY_ROUTES.forEach(function(route){
+      const original = ROUTES[route];
+      if(typeof original !== "function" || original.__sdaRoleGuarded) return;
+      const guarded = function(){
+        const u = typeof currentUser === "function" ? currentUser() : null;
+        if(u && u.role === "superAdmin"){
+          if(typeof toast === "function") toast("Local activity access", "Final projects, grades, face-to-face marks and attendance are managed by Teachers and Church Administrators. Use platform administration to manage access.", "info");
+          if(typeof go === "function") go("portal-superAdmin");
+          return "";
+        }
+        return original.apply(this, arguments);
+      };
+      guarded.__sdaRoleGuarded = true;
+      ROUTES[route] = guarded;
+    });
+    return true;
+  }
+  wrapRoutes();
+  /* Some route/menu declarations are installed asynchronously by older code. */
+  let tries = 0;
+  const timer = setInterval(function(){
+    applyPolicy(); wrapRoutes(); tries++;
+    if(tries >= 30) clearInterval(timer);
+  }, 250);
+})();
+</script>
 </body>
 </html>
 
