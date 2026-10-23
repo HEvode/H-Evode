@@ -62433,6 +62433,56 @@ console.log("✅ Multi-language helpers loaded");
 })();
 </script>
 
+
+<script>
+/* SDA LEARNING ROUTE RECOVERY PATCH
+   Ensures the public Learning menu always resolves to a valid route. */
+(function SDALearningRouteRecovery(){
+  function ensureLearningRoute(){
+    if(typeof ROUTES === 'undefined') return false;
+    if(typeof ROUTES.learning !== 'function'){
+      ROUTES.learning = function(){
+        const u = typeof currentUser === 'function' ? currentUser() : null;
+        if(!u){
+          return '<section class="section container" style="max-width:560px">'
+            + '<div class="reg-block text-center" style="padding:36px">'
+            + '<div class="e-feature-icon" style="margin:0 auto 18px;width:64px;height:64px">'
+            + '<i class="fa-solid fa-graduation-cap"></i></div>'
+            + '<h2>Learning Center</h2>'
+            + '<p class="muted" style="margin:16px 0 20px">Sign in to access your courses, lessons and progress.</p>'
+            + '<button class="btn btn-primary" onclick="go(\'login\')">Sign In</button> '
+            + '<button class="btn btn-outline" onclick="go(\'register\')">Register</button>'
+            + '</div></section>';
+        }
+        if(u.role === 'student'){
+          setTimeout(function(){ if(typeof go === 'function') go('portal-student'); }, 0);
+          return '<section class="section container"><div class="empty" style="padding:60px 20px">'
+            + '<span class="loader"></span><h3>Opening your Learning Center…</h3></div></section>';
+        }
+        const portal = 'portal-' + String(u.role || 'student');
+        const roleLabel = ({teacher:'Teacher',churchAdmin:'Church Admin',superAdmin:'Super Admin'})[u.role] || 'Learning';
+        return '<section class="section container" style="max-width:560px"><div class="reg-block text-center" style="padding:36px">'
+          + '<div class="e-feature-icon gold" style="margin:0 auto 18px;width:64px;height:64px"><i class="fa-solid fa-chalkboard-user"></i></div>'
+          + '<h2>Learning Center</h2><p class="muted" style="margin:16px 0 20px">Signed in as <strong>' + (typeof esc === 'function' ? esc(roleLabel) : roleLabel) + '</strong>.</p>'
+          + '<button class="btn btn-primary" onclick="go(\'' + portal + '\')">Open Dashboard</button> '
+          + '<button class="btn btn-outline" onclick="go(\'courses\')">Browse Courses</button>'
+          + '</div></section>';
+      };
+    }
+    /* Friendly aliases prevent older menu links from landing on Page not found. */
+    ROUTES.learn = ROUTES.learning;
+    ROUTES['learning-center'] = ROUTES.learning;
+    return true;
+  }
+  ensureLearningRoute();
+  /* Retry after other legacy scripts finish registering routes. */
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', ensureLearningRoute, {once:true});
+  }
+  console.log('[SDA] Learning route recovery ready');
+})();
+
+</script>
 </body>
 </html>
 
