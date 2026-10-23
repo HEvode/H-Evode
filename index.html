@@ -11,8 +11,7 @@
 
 <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/quill-resize-image@1.0.6/dist/quill-resize-image.min.js"></script>
-<!-- Image resize module -->
+<!-- Image resize module (loaded once) -->
 <script src="https://cdn.jsdelivr.net/npm/quill-resize-image@1.0.6/dist/quill-resize-image.min.js"></script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -52,7 +51,21 @@ firebase.initializeApp(firebaseConfig);
 window.__firestoreCache = {};
 
 async function firestoreRead(collectionName, options){
-  options = options || {};
+  options = Object.assign({}, options || {});
+  /* Firestore rules require Church Admin application reads to be scoped
+     to their own church. Apply the scope before issuing the query. */
+  const sessionUser = (typeof window.currentUser === "function") ? window.currentUser() : null;
+  if(!options.where && sessionUser){
+    if(collectionName === "applications" && sessionUser.role === "churchAdmin" && sessionUser.churchId){
+      options.where = ["churchId", "==", sessionUser.churchId];
+    }else if(collectionName === "users"){
+      if((sessionUser.role === "churchAdmin" || sessionUser.role === "teacher") && sessionUser.churchId){
+        options.where = ["churchId", "==", sessionUser.churchId];
+      }else if(sessionUser.role === "student" || !sessionUser.role){
+        options.where = ["uid", "==", sessionUser.uid];
+      }
+    }
+  }
   const cacheKey = collectionName + ":" + (options.where || "all");
 
   /* Return cached value if fresh (unless forceRefresh) */
@@ -87,15 +100,19 @@ async function firestoreRead(collectionName, options){
 
     /* If Firestore returns empty, fall back to DEMO data */
     if(snap.empty && !options.allowEmpty){
-  window.__firestoreCache[cacheKey] = [];
-  return [];
-}
+      window.__firestoreCache[cacheKey] = [];
+      if(collectionName === "applications") window.__firestoreCache["applications:all"] = [];
+      return [];
+    }
 
     const list = snap.docs.map(function(d){
       return Object.assign({ id: d.id }, d.data());
     });
 
     window.__firestoreCache[cacheKey] = list;
+    /* Legacy renderers read applications:all; it now contains only the
+       query permitted for the current role, never another church's queue. */
+    if(collectionName === "applications") window.__firestoreCache["applications:all"] = list;
     return list;
 
   }catch(err){
@@ -9448,6 +9465,10 @@ function renderStatusTab(){
         + 'autocomplete="off" style="text-transform:uppercase;font-family:monospace;'
         + 'font-weight:700;letter-spacing:.05em">'
     + '</div>'
+    + '<div class="form-group">'
+      + '<label>Email used for registration</label>'
+      + '<input id="regStatusEmail" type="email" autocomplete="email" placeholder="yourname@gmail.com">'
+    + '</div>'
 
     + '<button class="btn btn-primary" style="width:100%" onclick="regCheckStatus()">'
       + '<i class="fa-solid fa-magnifying-glass"></i> Check Status</button>'
@@ -9468,8 +9489,19 @@ async function regCheckStatus(){
   if(!input || !host) return;
 
   const code = (input.value || "").trim().toUpperCase();
-  if(!code){
-    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Please enter a number.</h3></div>';
+  const emailInput = document.getElementById("regStatusEmail");
+  const email = (emailInput && emailInput.value || "").trim().toLowerCase();
+  const signedInEmail = FB.auth && FB.auth.currentUser && (FB.auth.currentUser.email || "").toLowerCase();
+  if(!code || !email){
+    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Enter both your registration number and email.</h3></div>';
+    return;
+  }
+  if(!FB.auth || !FB.auth.currentUser){
+    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Please sign in first.</h3><p>For privacy, registration status is available only to the account that submitted the application.</p><button class="btn btn-primary" onclick="go(&quot;login&quot;)">Sign In</button></div>';
+    return;
+  }
+  if(signedInEmail !== email){
+    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Email does not match the signed-in account.</h3></div>';
     return;
   }
 
@@ -9482,6 +9514,7 @@ async function regCheckStatus(){
   try{
     const snap = await FB.db.collection("applications")
       .where("regNumber", "==", code)
+      .where("email", "==", email)
       .limit(1)
       .get();
 
@@ -10550,16 +10583,17 @@ async function submitLogin(form){
     const data = userDoc.data();
 
     if(data.status === "PENDING_APPROVAL"){
-      await FB.auth.signOut();
+      /* Keep the user signed in only to view verification/approval status.
+         Firestore rules and route guards still deny protected learning actions. */
       if(err){
-        err.textContent = "Your account is pending approval. "
-          + (data.approverRole === "superAdmin"
-              ? "A Super Admin will review it soon."
-              : "Your Church Admin will review it soon.");
+        err.textContent = "Your account is awaiting approval. You can check its status here; learning features remain locked until approval and email verification are complete.";
         err.style.display = "block";
       }
       btn.disabled = false;
       btn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Sign In';
+      setTimeout(function(){
+        go(cred.user.emailVerified ? "registration-pending" : "verify-email");
+      }, 250);
       return;
     }
 
@@ -10589,6 +10623,65 @@ async function submitLogin(form){
 }
 window.submitLogin = submitLogin;
 
+
+/* ═══════════════════════════════════════════════════════════
+   PENDING REGISTRATION STATUS — signed-in, restricted account
+   ═══════════════════════════════════════════════════════════ */
+ROUTES["registration-pending"] = function(){
+  const fbUser = FB && FB.auth && FB.auth.currentUser;
+  if(!fbUser){
+    setTimeout(function(){ go("login"); }, 50);
+    return '<section class="section container"><div class="empty"><h3>Please sign in to check your account status.</h3></div></section>';
+  }
+  setTimeout(async function(){
+    const host = document.getElementById("registrationPendingHost");
+    if(!host) return;
+    try{
+      const snap = await FB.db.collection("users").doc(fbUser.uid).get();
+      if(!snap.exists){
+        host.innerHTML = '<div class="empty"><h3>Account record not found</h3><p>Please contact support.</p></div>';
+        return;
+      }
+      const data = snap.data();
+      await refreshSession();
+      if(data.status === "ACTIVE"){
+        if(!fbUser.emailVerified && VERIFICATION_ENABLED){ go("verify-email"); return; }
+        host.innerHTML = '<div class="empty"><h3>Your account is approved</h3><p>You can now access your learning dashboard.</p><button class="btn btn-primary" onclick="openApprovedPortal()">Open Dashboard</button></div>';
+        return;
+      }
+      if(data.status === "REJECTED" || data.status === "DISABLED" || data.status === "SUSPENDED"){
+        host.innerHTML = '<div class="empty"><h3>Registration not approved</h3><p>' + esc(data.rejectReason || "Please contact your Church Admin for more information.") + '</p><button class="btn btn-outline" onclick="logout()">Sign out</button></div>';
+        return;
+      }
+      const emailVerified = !!fbUser.emailVerified;
+      host.innerHTML = '<div class="reg-block" style="max-width:650px;margin:0 auto;text-align:center;padding:30px">'
+        + '<div class="e-feature-icon gold" style="margin:0 auto 16px;width:70px;height:70px;font-size:1.8rem"><i class="fa-solid fa-hourglass-half"></i></div>'
+        + '<h2 style="color:var(--navy)">Registration Pending Approval</h2>'
+        + '<p class="muted">Your account is saved. Your Church Admin must approve it before learning features become available.</p>'
+        + '<div style="text-align:left;background:#F7FAFF;border-radius:12px;padding:16px;margin:18px 0">'
+        + '<p><strong>Name:</strong> ' + esc(data.name || "—") + '</p>'
+        + '<p><strong>Email:</strong> ' + esc(data.email || fbUser.email || "—") + '</p>'
+        + '<p><strong>Church:</strong> ' + esc(data.churchName || data.churchId || "—") + '</p>'
+        + '<p><strong>Email verification:</strong> ' + (emailVerified ? '<span style="color:#137547">Verified</span>' : '<span style="color:#9A6700">Not verified yet</span>') + '</p>'
+        + '<p><strong>Church approval:</strong> <span style="color:#9A6700">Pending</span></p>'
+        + '</div>'
+        + (!emailVerified && VERIFICATION_ENABLED ? '<button class="btn btn-outline" onclick="go(&quot;verify-email&quot;)">Verify Email</button> ' : '')
+        + '<button class="btn btn-primary" onclick="refreshRegistrationStatus()"><i class="fa-solid fa-rotate"></i> Refresh Status</button> '
+        + '<button class="btn btn-outline" onclick="logout()">Sign Out</button>'
+        + '</div>';
+    }catch(err){
+      console.error("[registration-pending]", err);
+      host.innerHTML = '<div class="empty"><h3>Could not check status</h3><p>' + esc(err.message || "Please try again.") + '</p><button class="btn btn-primary" onclick="refreshRegistrationStatus()">Retry</button></div>';
+    }
+  }, 80);
+  return '<section class="page-header"><div class="container"><h1>Registration Status</h1><p>Check your email verification and church approval.</p></div></section><section class="section container"><div id="registrationPendingHost"><div class="empty"><span class="loader"></span><p>Checking status…</p></div></div></section>';
+};
+window.refreshRegistrationStatus = function(){ go("registration-pending"); };
+window.openApprovedPortal = function(){
+  const u = currentUser();
+  if(!u || !u.role) { go("login"); return; }
+  go("portal-" + u.role);
+};
 
 /* ═══════════════════════════════════════════════════════════
    4. REGISTER ROUTE  ★ v5 — Church picker for students
@@ -12292,17 +12385,26 @@ async function approveApplication(appId){
   if(!confirm(msg)) return;
 
   const me = currentUser();
+  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
+    toast("Access denied", "Only authorized administrators can approve applications.", "error");
+    return;
+  }
+  if(me.role === "churchAdmin" && (!me.churchId || app.churchId !== me.churchId)){
+    toast("Access denied", "You can only approve applications for your own church.", "error");
+    return;
+  }
 
   try{
     await FB.db.collection("applications").doc(app.id).update({
-      status:     "APPROVED",
+      status: "APPROVED",
       approvedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      approvedBy: me ? me.user : "admin"
+      approvedBy: me.uid || me.user || me.email || "admin"
     });
     firestoreClearCache("applications");
   }catch(err){
     console.error("[approveApplication]", err);
-    toast("Warning", "Firestore update failed — retrying.", "warning");
+    toast("Approval failed", err.message || "Missing or insufficient permissions.", "error");
+    return; /* Do not create an account if the approval write failed. */
   }
 
   const result = await createStudentAccount(app);
@@ -12441,17 +12543,27 @@ async function rejectApplication(appId){
   if(reason === null) return;
 
   const me = currentUser();
+  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
+    toast("Access denied", "Only authorized administrators can reject applications.", "error");
+    return;
+  }
+  if(me.role === "churchAdmin" && (!me.churchId || app.churchId !== me.churchId)){
+    toast("Access denied", "You can only reject applications for your own church.", "error");
+    return;
+  }
 
   try{
     await FB.db.collection("applications").doc(app.id).update({
-      status:       "REJECTED",
-      rejectedAt:   firebase.firestore.FieldValue.serverTimestamp(),
+      status: "REJECTED",
+      rejectedAt: firebase.firestore.FieldValue.serverTimestamp(),
       rejectReason: reason || "",
-      rejectedBy:   me ? me.user : "admin"
+      rejectedBy: me.uid || me.user || me.email || "admin"
     });
     firestoreClearCache("applications");
   }catch(err){
     console.error("[rejectApplication]", err);
+    toast("Rejection failed", err.message || "Missing or insufficient permissions.", "error");
+    return;
   }
 
   try{
@@ -15863,13 +15975,19 @@ ROUTES["user-approvals"] = function(){
         return x.status === "PENDING_APPROVAL";
       });
 
+      /* Approval queue is strictly scoped by approver and church.
+         A Church Admin must never see another church's student queue. */
       const filtered = u.role === "churchAdmin"
         ? pendingUsers.filter(function(x){
-            return !x.churchId
-                || x.churchId === u.churchId
-                || x.approverRole === "churchAdmin";
+            return !!u.churchId
+                && x.churchId === u.churchId
+                && x.approverRole !== "superAdmin"
+                && (x.role === "student" || x.role === "teacher");
           })
-        : pendingUsers;
+        : pendingUsers.filter(function(x){
+            /* Super Admin handles platform-level registrations only. */
+            return x.role === "churchAdmin" && x.approverRole === "superAdmin";
+          });
 
       if(!filtered.length){
         host.innerHTML =
@@ -15967,38 +16085,76 @@ ROUTES["user-approvals"] = function(){
 };
 
 window.approvePendingUser = async function(uid){
-  if(!confirm("Approve this user?\n\nThey will be able to sign in immediately.")) return;
+  const me = currentUser();
+  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
+    toast("Access denied", "Only authorized administrators can approve users.", "error");
+    return;
+  }
+  if(!confirm("Approve this user? Their account will become active, but email verification may still be required.")) return;
 
   try{
-    await FB.db.collection("users").doc(uid).update({
-      status:     "ACTIVE",
+    const ref = FB.db.collection("users").doc(uid);
+    const snap = await ref.get();
+    if(!snap.exists) throw new Error("User record not found.");
+    const target = snap.data();
+    if(me.role === "churchAdmin" && (!me.churchId || target.churchId !== me.churchId || !["student","teacher"].includes(target.role))){
+      throw new Error("You can only approve students or teachers assigned to your own church.");
+    }
+    if(me.role === "superAdmin" && target.role !== "churchAdmin"){
+      throw new Error("Super Admin approval is reserved for platform-level accounts.");
+    }
+    if(target.status !== "PENDING_APPROVAL") throw new Error("This account is no longer pending approval.");
+
+    await ref.update({
+      status: "ACTIVE",
       approvedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      approvedBy: currentUser().user
+      approvedBy: me.uid || me.user || me.email || "admin",
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     firestoreClearCache("users");
-    toast("User approved", "They can now sign in.", "success");
+    toast("User approved", "Account activated. Email verification is still checked separately.", "success");
     go("user-approvals");
   }catch(err){
-    toast("Failed", err.message, "error");
+    console.error("[approvePendingUser]", err);
+    toast("Approval failed", err.message || "Missing or insufficient permissions.", "error");
   }
 };
 
 window.rejectPendingUser = async function(uid){
+  const me = currentUser();
+  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
+    toast("Access denied", "Only authorized administrators can reject users.", "error");
+    return;
+  }
   const reason = prompt("Reject this user? Enter a reason (optional):", "");
   if(reason === null) return;
 
   try{
-    await FB.db.collection("users").doc(uid).update({
-      status:       "REJECTED",
-      rejectedAt:   firebase.firestore.FieldValue.serverTimestamp(),
-      rejectedBy:   currentUser().user,
-      rejectReason: reason || ""
+    const ref = FB.db.collection("users").doc(uid);
+    const snap = await ref.get();
+    if(!snap.exists) throw new Error("User record not found.");
+    const target = snap.data();
+    if(me.role === "churchAdmin" && (!me.churchId || target.churchId !== me.churchId || !["student","teacher"].includes(target.role))){
+      throw new Error("You can only reject students or teachers assigned to your own church.");
+    }
+    if(me.role === "superAdmin" && target.role !== "churchAdmin"){
+      throw new Error("Super Admin decisions here are reserved for platform-level accounts.");
+    }
+    if(target.status !== "PENDING_APPROVAL") throw new Error("This account is no longer pending approval.");
+
+    await ref.update({
+      status: "REJECTED",
+      rejectedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      rejectedBy: me.uid || me.user || me.email || "admin",
+      rejectReason: reason || "",
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     firestoreClearCache("users");
     toast("User rejected", "The user was not approved.", "info");
     go("user-approvals");
   }catch(err){
-    toast("Failed", err.message, "error");
+    console.error("[rejectPendingUser]", err);
+    toast("Rejection failed", err.message || "Missing or insufficient permissions.", "error");
   }
 };
 
@@ -59850,10 +60006,12 @@ body.mobile-menu-open {
                 + '<h2 style="color:var(--navy);margin-bottom:8px">'
                   + 'Email Verified ✓</h2>'
                 + '<p class="muted" style="margin-bottom:24px">'
-                  + 'Your email address is verified. You can now use your account.</p>'
-                + '<button class="btn btn-primary" '
-                  + 'onclick="go(\'portal-' + (currentUser() ? currentUser().role : "student") + '\')">'
-                  + '<i class="fa-solid fa-arrow-right"></i> Go to Dashboard'
+                  + ((currentUser() && currentUser().status === "PENDING_APPROVAL")
+                      ? 'Your email is verified. Your church must still approve your account before learning access is enabled.'
+                      : 'Your email address is verified. You can now continue to your account.') + '</p>'
+                + '<button class="btn btn-primary" onclick="continueAfterVerification()">'
+                  + '<i class="fa-solid fa-arrow-right"></i> '
+                  + ((currentUser() && currentUser().status === "PENDING_APPROVAL") ? 'Check Registration Status' : 'Go to Dashboard')
                 + '</button>'
               + '</div>'
 
@@ -59921,6 +60079,13 @@ body.mobile-menu-open {
      BUTTON — Check verification status
      ═══════════════════════════════════════════════════════════ */
 
+  window.continueAfterVerification = function(){
+    const u = currentUser();
+    if(u && u.status === "PENDING_APPROVAL") go("registration-pending");
+    else if(u && u.role) go("portal-" + u.role);
+    else go("login");
+  };
+
   window.checkVerificationStatus = async function(){
     const btn = document.getElementById("checkVerifyBtn");
     if(!btn) return;
@@ -59940,7 +60105,9 @@ body.mobile-menu-open {
       if(verified){
         setTimeout(function(){
           const u = currentUser();
-          if(u && u.role){
+          if(u && u.status === "PENDING_APPROVAL"){
+            go("registration-pending");
+          }else if(u && u.role){
             go("portal-" + u.role);
           }else{
             go("home");
