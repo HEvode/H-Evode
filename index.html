@@ -3676,6 +3676,28 @@ pre, code { overflow-wrap: anywhere; }
 </style>
 <!-- END SDA RESPONSIVE VISUAL POLISH -->
 
+
+<style id="sda-mobile-render-repair">
+html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+*,*::before,*::after{box-sizing:border-box}
+img,video,canvas,svg{max-width:100%}
+body{overflow-wrap:anywhere}
+@media(max-width:640px){
+ body{font-size:16px;line-height:1.5}
+ h1{font-size:clamp(1.55rem,6vw,2.1rem);line-height:1.18}
+ h2{font-size:clamp(1.3rem,5vw,1.7rem);line-height:1.22}
+ h3{font-size:clamp(1.1rem,4.3vw,1.35rem);line-height:1.28}
+ p,li,label,.muted,.section-subtitle{font-size:1rem;line-height:1.55;overflow-wrap:anywhere}
+ button,.btn,a[role="button"]{min-height:42px;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+ input,select,textarea{font-size:16px!important;max-width:100%}
+ .container,.section,.card,.reg-block{max-width:100%;min-width:0}
+ .grid,[class*="grid-"]{min-width:0}
+ header,.navbar,.nav-bar,.topbar{max-width:100%}
+}
+@media(max-width:380px){body{font-size:15px}.container{padding-left:12px!important;padding-right:12px!important}}
+.broken-image-placeholder{display:flex;align-items:center;justify-content:center;min-height:48px;padding:12px;color:#dce6ff;background:rgba(5,10,42,.72);border-radius:18px;font-size:.9rem;text-align:center}
+</style>
+
 </head>
 
 <body>
@@ -10330,7 +10352,46 @@ function printMyCard(){
     + '@media print{@page{size:A6 landscape;margin:4mm}}</style>'
     + '</head><body>' + node.outerHTML
     + '<script>setTimeout(function(){window.focus();window.print();},400);<\/script>'
-    + '</body></html>'
+    + '
+<script id="sda-mobile-render-repair-js">
+(function(){
+ 'use strict';
+ // Remove only standalone quote-plus-quote fragments accidentally rendered as text.
+ function cleanStrayCode(root){
+  if(!root||!root.ownerDocument && root!==document)return;
+  var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT), nodes=[], n;
+  while((n=walker.nextNode())){
+   var value=(n.nodeValue||'').trim();
+   if(/^(?:['\u2018\u2019\u201c\u201d]\s*\+\s*['\u2018\u2019\u201c\u201d])$/.test(value))nodes.push(n);
+  }
+  nodes.forEach(function(node){if(node.parentNode)node.parentNode.removeChild(node);});
+ }
+ function fixBrokenImages(root){
+  (root||document).querySelectorAll('img').forEach(function(img){
+   if(img.dataset.sdaFallbackBound)return;
+   img.dataset.sdaFallbackBound='1';
+   img.addEventListener('error',function(){
+    if(img.dataset.sdaFallbackDone)return;
+    img.dataset.sdaFallbackDone='1';
+    var box=document.createElement('div');box.className='broken-image-placeholder';
+    box.textContent=img.alt&&img.alt.trim()?('Image unavailable: '+img.alt.trim()):'Image unavailable';
+    var style=img.getAttribute('style');if(style)box.setAttribute('style',style+';object-fit:initial;');
+    if(img.parentNode)img.parentNode.replaceChild(box,img);
+   },{once:true});
+   if(img.complete&&img.naturalWidth===0&&img.getAttribute('src'))img.dispatchEvent(new Event('error'));
+  });
+ }
+ function repair(){cleanStrayCode(document.body);fixBrokenImages(document);}
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',repair,{once:true});else repair();
+ var timer=null;
+ new MutationObserver(function(records){
+  if(timer)clearTimeout(timer);
+  timer=setTimeout(function(){records.forEach(function(r){r.addedNodes&&r.addedNodes.forEach(function(node){if(node.nodeType===1){cleanStrayCode(node);fixBrokenImages(node);}else if(node.nodeType===3&&/^(?:['\u2018\u2019\u201c\u201d]\s*\+\s*['\u2018\u2019\u201c\u201d])$/.test((node.nodeValue||'').trim()))node.remove();});});},60);
+ }).observe(document.documentElement,{childList:true,subtree:true});
+})();
+</script>
+
+</body></html>'
   );
   w.document.close();
   toast("Print dialog opened", "Ready to print.", "success");
