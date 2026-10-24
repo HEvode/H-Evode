@@ -3698,6 +3698,43 @@ body{overflow-wrap:anywhere}
 .broken-image-placeholder{display:flex;align-items:center;justify-content:center;min-height:48px;padding:12px;color:#dce6ff;background:rgba(5,10,42,.72);border-radius:18px;font-size:.9rem;text-align:center}
 </style>
 
+
+<style id="sda-footer-interactive-polish">
+/* SDA Learning Platform — orderly, accessible, interactive footer */
+#siteFooterEl{position:relative;isolation:isolate;overflow:hidden;padding:clamp(38px,5vw,64px) 0 22px;margin-top:clamp(36px,5vw,64px);background:linear-gradient(135deg,#07152f 0%,#0c2346 58%,#102e50 100%);color:#dce6f5;border-top:3px solid #d3a64b}
+#siteFooterEl:before{content:"";position:absolute;inset:0 0 auto;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);pointer-events:none}
+#siteFooterEl>.container{position:relative;z-index:1}
+#siteFooterEl .footer-grid{display:grid;grid-template-columns:minmax(240px,1.55fr) repeat(4,minmax(130px,1fr));gap:clamp(20px,3vw,38px);margin:0 0 34px;align-items:start}
+#siteFooterEl .footer-col{min-width:0}
+#siteFooterEl .footer-col:first-child{padding-right:clamp(0px,2vw,22px)}
+#siteFooterEl .footer-col h4{display:flex;align-items:center;gap:9px;color:#fff;font-size:.94rem;font-weight:800;letter-spacing:.045em;text-transform:uppercase;margin:0 0 17px;padding-bottom:11px;position:relative}
+#siteFooterEl .footer-col h4:after{content:"";position:absolute;left:0;bottom:0;width:34px;height:2px;border-radius:2px;background:#d3a64b}
+#siteFooterEl .footer-col p{color:#c5d2e5;line-height:1.75;margin:0 0 14px}
+#siteFooterEl .footer-col>a{display:flex;align-items:center;gap:8px;width:fit-content;max-width:100%;padding:6px 0;color:#c4d1e5;text-decoration:none;line-height:1.45;transition:color .18s ease,transform .18s ease}
+#siteFooterEl .footer-col>a:hover,#siteFooterEl .footer-col>a:focus-visible{color:#ffd77d;transform:translateX(4px);padding-left:0;text-decoration:none}
+#siteFooterEl .footer-col a:focus-visible,#siteFooterEl .social-row a:focus-visible{outline:3px solid #ffd77d;outline-offset:4px;border-radius:7px}
+#siteFooterEl .social-heading{font-size:.77rem;color:#e5c77f;font-weight:800;letter-spacing:.09em;text-transform:uppercase;margin:19px 0 10px}
+#siteFooterEl .social-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:0 0 17px}
+#siteFooterEl .social-row a{position:relative;display:inline-flex;flex:0 0 42px;width:42px;height:42px;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.17);border-radius:13px;background:rgba(255,255,255,.075);color:#fff;font-size:1.08rem;text-decoration:none;box-shadow:0 4px 12px rgba(0,0,0,.12);transition:transform .2s ease,background .2s ease,border-color .2s ease,box-shadow .2s ease}
+#siteFooterEl .social-row a:hover{transform:translateY(-4px);background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.55);box-shadow:0 9px 20px rgba(0,0,0,.23)}
+#siteFooterEl .social-row a[aria-label="WhatsApp"]:hover{background:#128c53;border-color:#25d366}
+#siteFooterEl .social-row a[aria-label="Facebook"]:hover{background:#1877f2;border-color:#6ba5ff}
+#siteFooterEl .social-row a[aria-label="Instagram"]:hover{background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045);border-color:#f5a1c6}
+#siteFooterEl .social-row a[aria-label="YouTube"]:hover{background:#e62117;border-color:#ff7770}
+#siteFooterEl .footer-contact{display:grid;gap:9px;margin-top:12px;font-size:.83rem;line-height:1.55}
+#siteFooterEl .footer-contact>div{display:grid;grid-template-columns:18px minmax(0,1fr);gap:9px;align-items:start;overflow-wrap:anywhere}
+#siteFooterEl .footer-contact i{margin-top:3px}
+#siteFooterEl .footer-contact a{display:inline;color:#dce6f5;text-decoration:none;overflow-wrap:anywhere}
+#siteFooterEl .footer-contact a:hover{color:#ffd77d;text-decoration:underline}
+#siteFooterEl .footer-bottom{display:flex;justify-content:space-between;align-items:center;gap:12px 24px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,.16);padding-top:19px;font-size:.8rem;line-height:1.6;color:#aebed4}
+#siteFooterEl .footer-bottom a{color:#f2d18a;text-decoration:none}
+#siteFooterEl .footer-bottom a:hover{text-decoration:underline;color:#fff}
+#siteFooterEl .seo-crawlable{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+@media(max-width:1050px){#siteFooterEl .footer-grid{grid-template-columns:repeat(3,minmax(0,1fr))}#siteFooterEl .footer-col:first-child{grid-column:span 3;max-width:560px}}
+@media(max-width:680px){#siteFooterEl{padding:36px 0 18px}#siteFooterEl .footer-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 20px;margin-bottom:28px}#siteFooterEl .footer-col:first-child{grid-column:1/-1;max-width:none;padding-right:0}#siteFooterEl .footer-col h4{font-size:.84rem;margin-bottom:13px}#siteFooterEl .footer-col>a{font-size:.84rem;padding:6px 0}#siteFooterEl .footer-bottom{align-items:flex-start;flex-direction:column;gap:7px}}
+@media(max-width:380px){#siteFooterEl .footer-grid{grid-template-columns:minmax(0,1fr);gap:22px}#siteFooterEl .footer-col:first-child{grid-column:auto}#siteFooterEl .social-row{gap:8px}#siteFooterEl .social-row a{flex-basis:40px;width:40px;height:40px}}
+@media(prefers-reduced-motion:reduce){#siteFooterEl *,#siteFooterEl *:before,#siteFooterEl *:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+</style>
 </head>
 
 <body>
@@ -29497,6 +29534,7 @@ console.log("   · All colors save to settings/website.colors");
           Worship • Learn • Serve • Connect
         </p>
 
+        <div class="social-heading">Follow our community</div>
         <div class="social-row mt-3">
           <a href="https://api.whatsapp.com/send?phone=250786765795"
              target="_blank" rel="noopener"
@@ -29520,7 +29558,7 @@ console.log("   · All colors save to settings/website.colors");
           </a>
         </div>
 
-        <div class="mt-3" style="font-size:.85rem;line-height:1.9">
+        <div class="footer-contact mt-3">
           <div>
             <i class="fa-solid fa-envelope" style="color:#CF9B3F"></i>
             <a href="mailto:habinshutievode001@gmail.com?subject=Message from website">
