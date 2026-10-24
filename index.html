@@ -10389,7 +10389,7 @@ function printMyCard(){
   timer=setTimeout(function(){records.forEach(function(r){r.addedNodes&&r.addedNodes.forEach(function(node){if(node.nodeType===1){cleanStrayCode(node);fixBrokenImages(node);}else if(node.nodeType===3&&/^(?:['\u2018\u2019\u201c\u201d]\s*\+\s*['\u2018\u2019\u201c\u201d])$/.test((node.nodeValue||'').trim()))node.remove();});});},60);
  }).observe(document.documentElement,{childList:true,subtree:true});
 })();
-</script>
+<\/script>
 
 </body></html>'
   );
