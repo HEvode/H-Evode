@@ -23375,7 +23375,57 @@ async function openPrintWindow(payload, role, title){
     + '  .card{box-shadow:none}'
     + '  @page{size:A5 landscape;margin:0}'
     + '}'
-    + '</style></head><body>'
+    + '</style>
+<style id="sda-phone-adaptive-type">
+/* Device-aware typography: fluid sizing follows the available viewport, not a fixed phone model. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { overflow-wrap: anywhere; }
+img, video, canvas, iframe, svg { max-width: 100%; }
+:where(h1,.h1) { font-size: clamp(1.55rem, 1.2rem + 2.2vw, 3rem); line-height: 1.16; }
+:where(h2,.h2) { font-size: clamp(1.25rem, 1.05rem + 1.25vw, 2.1rem); line-height: 1.22; }
+:where(h3,.h3) { font-size: clamp(1.05rem, .96rem + .65vw, 1.5rem); line-height: 1.3; }
+:where(p,li,label,input,select,textarea,button) { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  body { font-size: clamp(14px, 3.7vw, 16px); line-height: 1.55; }
+  :where(p,li,.muted,.description,.subtitle) { font-size: clamp(.875rem, 3.5vw, 1rem); }
+  :where(button,.btn,.icon-btn,input,select,textarea) { font-size: max(16px, 1em); }
+  :where(.container,.content,.page-content,.main-content,.section-inner) { min-width: 0; width: 100%; max-width: 100%; }
+  :where(.card,.panel,.modal-content,.form-card) { min-width: 0; max-width: 100%; }
+  :where(table) { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  :where(.mobile-panel) { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+  :where(.mobile-nav-link,.mobile-nav-group-head) { min-height: 46px; font-size: 1rem; line-height: 1.35; touch-action: manipulation; }
+  #bookFab { bottom: calc(16px + env(safe-area-inset-bottom)); left: 14px; z-index: 1000; }
+  #bookFabBtn { min-width: 48px; min-height: 48px; }
+}
+@media (max-width: 380px) {
+  body { font-size: 14px; }
+  :where(h1,.h1) { font-size: clamp(1.4rem, 6vw, 1.75rem); }
+  :where(.mobile-panel) { width: min(340px, 92vw); padding: 16px; }
+  :where(.btn,.button-row) { max-width: 100%; }
+}
+@media (min-width: 641px) and (max-width: 1024px) {
+  body { font-size: clamp(15px, 1.4vw, 17px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+</style>
+<script id="sda-device-classifier">
+(function(){
+  function updateDeviceClass(){
+    var width = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+    var device = width <= 640 ? 'phone' : width <= 1024 ? 'tablet' : 'desktop';
+    document.documentElement.setAttribute('data-device', device);
+    document.documentElement.style.setProperty('--sda-viewport-width', width + 'px');
+    document.documentElement.style.setProperty('--sda-viewport-height', (window.visualViewport ? window.visualViewport.height : window.innerHeight) + 'px');
+  }
+  updateDeviceClass();
+  window.addEventListener('resize', updateDeviceClass, {passive:true});
+  window.addEventListener('orientationchange', function(){ setTimeout(updateDeviceClass, 120); }, {passive:true});
+  if(window.visualViewport) window.visualViewport.addEventListener('resize', updateDeviceClass, {passive:true});
+})();
+</script>
+</head><body>'
     + '<div class="page"><div>'
       + '<div class="label">Front</div>'
       + '<div class="card"><img src="' + frontUrl + '"></div>'
@@ -52619,6 +52669,7 @@ table.data *,
           { label: "Registration", action: "go('register-apply')" }
         ]
       },
+      { label: "Reading Library / Books", icon: "fa-book-open", action: "openReadingPanel()" },
       { label: "Verify Certificate", icon: "fa-shield-halved", action: "go('verify')" },
       { label: "Portal",   icon: "fa-user-shield",        action: "openPortal()" },
       { label: "Sign In",  icon: "fa-right-to-bracket",   action: "go('login')" },
@@ -52649,8 +52700,8 @@ table.data *,
         });
         html += '</div></div>';
       } else {
-        html += '<a class="mobile-nav-link mobile-nav-link-main" '
-          + 'onclick="event.preventDefault();' + g.action + ';closeMobile()">'
+        html += '<a href="#" role="button" class="mobile-nav-link mobile-nav-link-main" '
+          + 'onclick="event.preventDefault();try{' + g.action + ';closeMobile()}catch(err){console.error('Mobile menu action failed',err);if(typeof toast==='function')toast('Could not open','Please try again.','error')} return false;">'
           + '<i class="fa-solid ' + g.icon + '"></i> ' + g.label
           + '</a>';
       }
