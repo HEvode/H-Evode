@@ -8303,9 +8303,12 @@ async function listSections(courseId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("sections").get();
 
-    const list = await Promise.all(snap.docs.map(function(d){
-      return hydrateLessonContent(courseId, sectionId, Object.assign({}, d.data(), { id: d.id }));
-    }));
+    /* Section documents contain section metadata, not lesson content.
+       Do not call hydrateLessonContent here: sectionId was undefined and
+       caused a ReferenceError, making every section appear to be missing. */
+    const list = snap.docs.map(function(d){
+      return Object.assign({}, d.data(), { id: d.id });
+    });
 
     list.sort(function(a, b){
       const oa = typeof a.order === "number" ? a.order : 9999;
@@ -8315,8 +8318,10 @@ async function listSections(courseId){
 
     return list;
   }catch(err){
-    console.error("[listSections]", err);
-    return [];
+    console.error("[listSections] Failed to load sections:", err);
+    /* Re-throw so the reading page can show a loading/permission error
+       instead of falsely displaying an empty course. */
+    throw err;
   }
 }
 window.listSections = listSections;
