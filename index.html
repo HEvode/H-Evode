@@ -8303,9 +8303,9 @@ async function listSections(courseId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("sections").get();
 
-    const list = snap.docs.map(function(d){
-      return Object.assign({}, d.data(), { id: d.id });
-    });
+    const list = await Promise.all(snap.docs.map(function(d){
+      return hydrateLessonContent(courseId, sectionId, Object.assign({}, d.data(), { id: d.id }));
+    }));
 
     list.sort(function(a, b){
       const oa = typeof a.order === "number" ? a.order : 9999;
@@ -8378,9 +8378,9 @@ async function listLessons(courseId, sectionId){
       .collection("sections").doc(sectionId)
       .collection("lessons").get();
 
-    const list = snap.docs.map(function(d){
-      return Object.assign({}, d.data(), { id: d.id });
-    });
+    const list = await Promise.all(snap.docs.map(function(d){
+      return hydrateLessonContent(courseId, sectionId, Object.assign({}, d.data(), { id: d.id }));
+    }));
 
     list.sort(function(a, b){
       const oa = typeof a.order === "number" ? a.order : 9999;
@@ -8403,13 +8403,52 @@ async function getLesson(courseId, sectionId, lessonId){
       .collection("sections").doc(sectionId)
       .collection("lessons").doc(lessonId).get();
     if(!snap.exists) return null;
-    return Object.assign({}, snap.data(), { id: snap.id });
+    return await hydrateLessonContent(courseId, sectionId, Object.assign({}, snap.data(), { id: snap.id }));
   }catch(err){
     console.error("[getLesson]", err);
     return null;
   }
 }
 window.getLesson = getLesson;
+
+/* Store very long lesson HTML in small Firestore subdocuments. Firestore documents
+   have a 1 MiB limit; chunking avoids the 1,048,487-byte content field failure. */
+const LESSON_CONTENT_CHUNK_CHARS = 180000;
+function lessonDocRef(courseId, sectionId, lessonId){
+  let ref = FB.db.collection("courses").doc(courseId);
+  if(sectionId) ref = ref.collection("sections").doc(sectionId).collection("lessons").doc(lessonId);
+  else ref = ref.collection("lessons").doc(lessonId);
+  return ref;
+}
+async function hydrateLessonContent(courseId, sectionId, lesson){
+  if(!lesson || !lesson.contentChunked) return lesson;
+  const ref = lessonDocRef(courseId, sectionId || lesson.sectionId || null, lesson.id);
+  const snap = await ref.collection("contentChunks").orderBy("index").get();
+  const content = snap.docs.map(function(d){ return d.data().text || ""; }).join("");
+  return Object.assign({}, lesson, {content:content, contentChunked:false});
+}
+async function writeLessonContent(ref, content){
+  const old = await ref.collection("contentChunks").get();
+  const batchDelete = FB.db.batch();
+  old.docs.forEach(function(d){ batchDelete.delete(d.ref); });
+  if(old.docs.length) await batchDelete.commit();
+  if(content.length <= LESSON_CONTENT_CHUNK_CHARS){
+    return {content:content, contentChunked:false, contentLength:content.length};
+  }
+  const chunks = [];
+  for(let i=0;i<content.length;i+=LESSON_CONTENT_CHUNK_CHARS){
+    chunks.push({index:chunks.length, text:content.slice(i,i+LESSON_CONTENT_CHUNK_CHARS)});
+  }
+  for(let i=0;i<chunks.length;i+=400){
+    const batch = FB.db.batch();
+    chunks.slice(i,i+400).forEach(function(c){
+      batch.set(ref.collection("contentChunks").doc(String(c.index).padStart(5,"0")), c);
+    });
+    await batch.commit();
+  }
+  return {content:"", contentChunked:true, contentLength:content.length, contentChunkCount:chunks.length};
+}
+window.hydrateLessonContent = hydrateLessonContent;
 
 async function saveLesson(courseId, sectionId, data){
   if(!courseId || !sectionId) throw new Error("courseId and sectionId required");
@@ -8421,19 +8460,15 @@ async function saveLesson(courseId, sectionId, data){
   const now = new Date().toISOString();
   const isNew = !data.createdAt;
 
-  const payload = Object.assign({}, data, {
-    courseId:  courseId,
-    sectionId: sectionId,
+  const ref = lessonDocRef(courseId, sectionId, data.id);
+  const contentFields = await writeLessonContent(ref, data.content || "");
+  const payload = Object.assign({}, data, contentFields, {
+    courseId: courseId, sectionId: sectionId,
     createdAt: isNew ? now : data.createdAt,
-    updatedAt: now,
-    updatedBy: u.user
+    updatedAt: now, updatedBy: u.user
   });
   if(isNew) payload.createdBy = u.user;
-
-  await FB.db.collection("courses").doc(courseId)
-    .collection("sections").doc(sectionId)
-    .collection("lessons").doc(data.id)
-    .set(payload, { merge: true });
+  await ref.set(payload, { merge: true });
 
   firestoreClearCache("courses");
   return payload;
@@ -8457,9 +8492,9 @@ async function getCourseLevelLessons(courseId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("lessons").get();
 
-    const list = snap.docs.map(function(d){
-      return Object.assign({}, d.data(), { id: d.id });
-    });
+    const list = await Promise.all(snap.docs.map(function(d){
+      return hydrateLessonContent(courseId, null, Object.assign({}, d.data(), { id: d.id }));
+    }));
 
     list.sort(function(a, b){
       return (a.order || 0) - (b.order || 0);
@@ -8479,7 +8514,7 @@ async function getCourseLevelLesson(courseId, lessonId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("lessons").doc(lessonId).get();
     if(!snap.exists) return null;
-    return Object.assign({}, snap.data(), { id: snap.id });
+    return await hydrateLessonContent(courseId, null, Object.assign({}, snap.data(), { id: snap.id }));
   }catch(err){
     console.error("[getCourseLevelLesson]", err);
     return null;
@@ -18102,6 +18137,29 @@ ROUTES["student-course"] = function(params){
   + '</section>';
 };
 
+async function getCourseExportText(courseId){
+  const snap = await FB.db.collection("courses").doc(courseId).get();
+  if(!snap.exists) throw new Error("Course not found");
+  const course = Object.assign({id:snap.id}, snap.data());
+  const lessons = await getAllCourseLessons(courseId);
+  let out = (course.title || "Course") + "\n" + "=".repeat(Math.min((course.title || "Course").length,80)) + "\n\n";
+  if(course.desc) out += course.desc + "\n\n";
+  lessons.forEach(function(l,i){
+    out += "LESSON " + (i+1) + ": " + (l.title || "Untitled") + "\n";
+    if(l.duration) out += "Duration: " + l.duration + " minutes\n";
+    out += (l.content || "").replace(/<br\s*\/?\s*>/gi,"\n").replace(/<\/(p|div|h[1-6]|li)>/gi,"\n").replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">") + "\n\n";
+  });
+  return {course:course, text:out};
+}
+window.copyCourseContent = async function(courseId){
+  try{ const x=await getCourseExportText(courseId); await navigator.clipboard.writeText(x.text); toast("Copied","Course and lesson text copied.","success"); }
+  catch(e){ try{const x=await getCourseExportText(courseId); window.prompt("Copy course content:",x.text);}catch(err){toast("Copy failed",err.message,"error");} }
+};
+window.downloadCourseContent = async function(courseId){
+  try{const x=await getCourseExportText(courseId); const blob=new Blob([x.text],{type:"text/plain;charset=utf-8"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=(x.course.title||"course").replace(/[^a-z0-9-_]+/gi,"-")+"-content.txt"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast("Downloaded","Course content saved as a text file.","success");}
+  catch(e){toast("Download failed",e.message,"error");}
+};
+
 function renderCoursePlayer(course, sectionData, progress, stats){
   const u = currentUser();
   const completedSet = new Set(progress.completedLessons || []);
@@ -18244,6 +18302,10 @@ function renderCoursePlayer(course, sectionData, progress, stats){
       + '</div>'
       + '<div style="margin-top:8px;font-size:.82rem;opacity:.92;font-weight:700">'
         + stats.pct + '% complete</div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'
+        + '<button class="btn btn-light btn-sm" onclick="downloadCourseContent(\'' + course.id + '\')"><i class="fa-solid fa-download"></i> Download Course</button>'
+        + '<button class="btn btn-outline btn-sm" onclick="copyCourseContent(\'' + course.id + '\')"><i class="fa-solid fa-copy"></i> Copy Course</button>'
+      + '</div>'
     + '</div>'
     + continueCard
     + sectionsHTML
@@ -18259,9 +18321,10 @@ async function getAllCourseLessons(courseId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("lessons")
       .get();
-    snap.docs.forEach(function(d){
-      all.push(Object.assign({ sectionId: null }, d.data(), { id: d.id }));
-    });
+    const loaded = await Promise.all(snap.docs.map(function(d){
+      return hydrateLessonContent(courseId, null, Object.assign({ sectionId: null }, d.data(), { id: d.id }));
+    }));
+    loaded.forEach(function(l){ all.push(l); });
   }catch(e){}
 
   try{
@@ -18272,9 +18335,10 @@ async function getAllCourseLessons(courseId){
         .collection("sections").doc(secId)
         .collection("lessons")
         .get();
-      snap.docs.forEach(function(d){
-        all.push(Object.assign({ sectionId: secId }, d.data(), { id: d.id }));
-      });
+      const loaded = await Promise.all(snap.docs.map(function(d){
+        return hydrateLessonContent(courseId, secId, Object.assign({ sectionId: secId }, d.data(), { id: d.id }));
+      }));
+      loaded.forEach(function(l){ all.push(l); });
     }
   }catch(e){}
 
@@ -25027,6 +25091,17 @@ window.filterBookPanel = filterBookPanel;
    5. BOOK VIEWER (read-only PDF via PDF.js)
    ═══════════════════════════════════════════════════════════ */
 
+window.downloadCurrentBook = function(){
+  const b=window.__currentBook;
+  if(!b || !b.fileUrl){toast("Download unavailable","This book has no PDF file URL.","error");return;}
+  const a=document.createElement("a"); a.href=b.fileUrl; a.target="_blank"; a.rel="noopener"; a.download=(b.title||"book").replace(/[^a-z0-9-_]+/gi,"-")+".pdf"; document.body.appendChild(a); a.click(); a.remove();
+};
+window.copyCurrentBookInfo = async function(){
+  const b=window.__currentBook; if(!b)return;
+  const text=(b.title||"Untitled")+"\nAuthor: "+(b.author||"Unknown")+"\nCategory: "+(b.category||"Book")+"\n"+(b.fileUrl||"");
+  try{await navigator.clipboard.writeText(text);toast("Copied","Book details and link copied.","success");}catch(e){window.prompt("Copy book details:",text);}
+};
+
 async function openBookViewer(bookId){
   closeReadingPanel();
 
@@ -25057,6 +25132,8 @@ async function openBookViewer(bookId){
           + '<button class="icon-btn" onclick="zoomBook(-1)" title="Zoom out">'
             + '<i class="fa-solid fa-magnifying-glass-minus"></i>'
           + '</button>'
+          + '<button class="icon-btn" onclick="downloadCurrentBook()" title="Download book PDF"><i class="fa-solid fa-download"></i></button>'
+          + '<button class="icon-btn" onclick="copyCurrentBookInfo()" title="Copy book details"><i class="fa-solid fa-copy"></i></button>'
           + '<button class="icon-btn" onclick="closeBookViewer()" '
             + 'aria-label="Close">'
             + '<i class="fa-solid fa-xmark"></i>'
@@ -37950,18 +38027,14 @@ async function submitLessonForm(courseId, sectionId, existingId, isEdit){
     }else{
       /* Course-level lesson (no section) */
       const now = new Date().toISOString();
-      const full = Object.assign({}, payload, {
-        courseId:  courseId,
-        sectionId: null,
-        createdAt: isEdit ? undefined : now,
-        updatedAt: now,
-        updatedBy: u.user
+      const ref = lessonDocRef(courseId, null, lessonId);
+      const contentFields = await writeLessonContent(ref, content);
+      const full = Object.assign({}, payload, contentFields, {
+        courseId: courseId, sectionId: null,
+        createdAt: isEdit ? undefined : now, updatedAt: now, updatedBy: u.user
       });
       if(isEdit && !full.createdAt) delete full.createdAt;
-
-      await FB.db.collection("courses").doc(courseId)
-        .collection("lessons").doc(lessonId)
-        .set(full, { merge: true });
+      await ref.set(full, { merge: true });
 
       firestoreClearCache("courses");
     }
