@@ -49,6 +49,12 @@ firebase.initializeApp(firebaseConfig);
    · Caches in window.__firestoreCache[collectionName]
    ═══════════════════════════════════════════════════════════ */
 window.__firestoreCache = {};
+/* Read status is separate from returned data so an empty collection is not
+   confused with a denied/offline request. Views can use this for honest UI. */
+window.__firestoreReadStatus = window.__firestoreReadStatus || {};
+window.firestoreCollectionStatus = function(name){
+  return window.__firestoreReadStatus[name + ":all"] || null;
+};
 
 async function firestoreRead(collectionName, options){
   options = Object.assign({}, options || {});
@@ -74,7 +80,17 @@ async function firestoreRead(collectionName, options){
   }
 
   if(!window.FB || !FB.db){
-    console.warn("[firestoreRead] FB not ready, using DEMO fallback for", collectionName);
+    const error = new Error("Firebase is not ready; live " + collectionName + " records could not be loaded.");
+    window.__firestoreReadStatus[cacheKey] = {
+      state: "error", collection: collectionName, message: error.message,
+      updatedAt: new Date().toISOString()
+    };
+    console.error("[firestoreRead]", error.message);
+    /* Never substitute demo courses, departments, churches, assignments, or
+       users for live records. This prevents fabricated operational data. */
+    const operational = ["courses", "departments", "churches", "enrollments", "users", "teacherAssignments"];
+    if(operational.indexOf(collectionName) !== -1) return [];
+    console.warn("[firestoreRead] Using legacy demo fallback for non-operational collection:", collectionName);
     return DEMO[collectionName] || [];
   }
 
@@ -101,6 +117,10 @@ async function firestoreRead(collectionName, options){
     /* If Firestore returns empty, fall back to DEMO data */
     if(snap.empty && !options.allowEmpty){
       window.__firestoreCache[cacheKey] = [];
+      window.__firestoreReadStatus[cacheKey] = {
+        state: "empty", collection: collectionName, count: 0,
+        updatedAt: new Date().toISOString()
+      };
       if(collectionName === "applications") window.__firestoreCache["applications:all"] = [];
       return [];
     }
@@ -110,14 +130,25 @@ async function firestoreRead(collectionName, options){
     });
 
     window.__firestoreCache[cacheKey] = list;
+    window.__firestoreReadStatus[cacheKey] = {
+      state: list.length ? "loaded" : "empty", collection: collectionName,
+      count: list.length, updatedAt: new Date().toISOString()
+    };
     /* Legacy renderers read applications:all; it now contains only the
        query permitted for the current role, never another church's queue. */
     if(collectionName === "applications") window.__firestoreCache["applications:all"] = list;
     return list;
 
   }catch(err){
-  console.error("[firestoreRead] Failed for " + collectionName + ":", err.message);
-  window.__firestoreCache[cacheKey] = [];
+  console.error("[firestoreRead] Failed for " + collectionName + ":", err);
+  window.__firestoreReadStatus[cacheKey] = {
+    state: "error", collection: collectionName,
+    code: err && err.code ? err.code : "unknown",
+    message: err && err.message ? err.message : "Unable to load records.",
+    updatedAt: new Date().toISOString()
+  };
+  /* Do not cache a permission/network failure as a valid empty result. */
+  delete window.__firestoreCache[cacheKey];
   return [];
 }
 }
@@ -8615,7 +8646,9 @@ ROUTES["admin-courses"] = function(){
       + '<h3>Access denied</h3></div></section>';
   }
 
-  const churchId = getCurrentChurchId();
+  /* Super Admin sees the platform-wide course inventory. Church Admin is always
+     scoped to their own assigned church, not a stale global church selector. */
+  const churchId = u.role === "superAdmin" ? "" : (u.churchId || getCurrentChurchId() || "");
 
   setTimeout(async function(){
     const host = document.getElementById("adminCoursesGrid");
@@ -10429,46 +10462,7 @@ function printMyCard(){
     + '@media print{@page{size:A6 landscape;margin:4mm}}</style>'
     + '</head><body>' + node.outerHTML
     + '<script>setTimeout(function(){window.focus();window.print();},400);<\/script>'
-    + '
-<script id="sda-mobile-render-repair-js">
-(function(){
- 'use strict';
- // Remove only standalone quote-plus-quote fragments accidentally rendered as text.
- function cleanStrayCode(root){
-  if(!root||!root.ownerDocument && root!==document)return;
-  var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT), nodes=[], n;
-  while((n=walker.nextNode())){
-   var value=(n.nodeValue||'').trim();
-   if(/^(?:['\u2018\u2019\u201c\u201d]\s*\+\s*['\u2018\u2019\u201c\u201d])$/.test(value))nodes.push(n);
-  }
-  nodes.forEach(function(node){if(node.parentNode)node.parentNode.removeChild(node);});
- }
- function fixBrokenImages(root){
-  (root||document).querySelectorAll('img').forEach(function(img){
-   if(img.dataset.sdaFallbackBound)return;
-   img.dataset.sdaFallbackBound='1';
-   img.addEventListener('error',function(){
-    if(img.dataset.sdaFallbackDone)return;
-    img.dataset.sdaFallbackDone='1';
-    var box=document.createElement('div');box.className='broken-image-placeholder';
-    box.textContent=img.alt&&img.alt.trim()?('Image unavailable: '+img.alt.trim()):'Image unavailable';
-    var style=img.getAttribute('style');if(style)box.setAttribute('style',style+';object-fit:initial;');
-    if(img.parentNode)img.parentNode.replaceChild(box,img);
-   },{once:true});
-   if(img.complete&&img.naturalWidth===0&&img.getAttribute('src'))img.dispatchEvent(new Event('error'));
-  });
- }
- function repair(){cleanStrayCode(document.body);fixBrokenImages(document);}
- if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',repair,{once:true});else repair();
- var timer=null;
- new MutationObserver(function(records){
-  if(timer)clearTimeout(timer);
-  timer=setTimeout(function(){records.forEach(function(r){r.addedNodes&&r.addedNodes.forEach(function(node){if(node.nodeType===1){cleanStrayCode(node);fixBrokenImages(node);}else if(node.nodeType===3&&/^(?:['\u2018\u2019\u201c\u201d]\s*\+\s*['\u2018\u2019\u201c\u201d])$/.test((node.nodeValue||'').trim()))node.remove();});});},60);
- }).observe(document.documentElement,{childList:true,subtree:true});
-})();
-<\/script>
-
-</body></html>'
+    + '</body></html>'
   );
   w.document.close();
   toast("Print dialog opened", "Ready to print.", "success");
@@ -16848,7 +16842,9 @@ ROUTES["super-departments"] = function(){
                 + '<div class="e-card-actions">'
                   + '<button class="btn btn-primary btn-sm" '
                     + 'onclick="openEditDeptModal(\'' + d.id + '\')">'
-                    + '<i class="fa-solid fa-pen"></i> Edit</button>'
+                    + ((d.churchId === "__global__" || d.isGlobal === true || !d.churchId)
+                      ? '<i class="fa-solid fa-church"></i> Assign to Church'
+                      : '<i class="fa-solid fa-pen"></i> Edit Assignment') + '</button>'
                   + '<button class="btn btn-outline btn-sm" '
                     + 'style="color:#B23A3A;border-color:#B23A3A" '
                     + 'onclick="confirmDeleteDept(\'' + d.id + '\',\'' 
@@ -17142,7 +17138,10 @@ ROUTES["church-admin-departments"] = function(){
     try{
       const all = await firestoreRead("departments", { forceRefresh: true });
       const departments = all.filter(function(d){
-        return !churchId || d.churchId === churchId;
+        /* Global departments are available in every church; local departments
+           remain isolated to their assigned church. */
+        return !churchId || !d.churchId || d.churchId === "__global__"
+          || d.isGlobal === true || d.churchId === churchId;
       });
       window.__myDepartments = departments;
 
@@ -34550,64 +34549,36 @@ console.log("✅ Teacher add-students feature loaded");
      CLEANUP UTILITY — Delete orphaned DEMO courses
      ═══════════════════════════════════════════════════════════ -->
 <script>
-window.cleanupDemoCourses = async function(){
+window.auditPotentialDuplicateCourses = async function(){
   const u = currentUser();
   if(!u || u.role !== "superAdmin"){
-    console.error("Only Super Admin can cleanup.");
     toast("Access denied", "Super Admin only.", "error");
     return;
   }
-
-  if(!confirm(
-    "This will DELETE all courses with empty churchId AND no teacherEmail.\n\n"
-    + "These are old DEMO courses that should not exist.\n\n"
-    + "Continue?"
-  )) return;
-
   try{
     const snap = await FB.db.collection("courses").get();
-    let deleted = 0;
-    let skipped = 0;
-
-    const batch = FB.db.batch();
-
+    const candidates = [];
     snap.docs.forEach(function(d){
-      const c = d.data();
-      const hasChurch  = !!c.churchId && c.churchId.trim() !== "";
-      const hasTeacher = !!c.teacherEmail && c.teacherEmail.trim() !== "";
-
-      /* Delete only orphaned DEMO docs */
-      if(!hasChurch && !hasTeacher){
-        batch.delete(d.ref);
-        deleted++;
-        console.log("  🗑 Deleting:", d.id, "| title:", c.title);
-      }else{
-        skipped++;
+      const c = d.data() || {};
+      /* Missing church/teacher fields are a review signal, NOT proof of a demo. */
+      if(!c.churchId && !c.teacherEmail){
+        candidates.push({ id:d.id, title:c.title || c.name || "Untitled course",
+          createdBy:c.createdBy || "", createdAt:c.createdAt || "",
+          departmentId:c.departmentId || "", sectionCount:null,
+          reason:"Missing churchId and teacherEmail; review manually before any deletion." });
       }
     });
-
-    if(deleted > 0){
-      await batch.commit();
-    }
-
-    firestoreClearCache("courses");
-
-    console.log("═══════════════════════════════════════");
-    console.log("  CLEANUP COMPLETE");
-    console.log("═══════════════════════════════════════");
-    console.log("✅ Deleted:", deleted, "orphaned DEMO courses");
-    console.log("⏭️  Kept:", skipped, "real courses");
-
-    toast("Cleanup done", deleted + " DEMO courses deleted.", "success");
-
-    /* Reload the page */
-    setTimeout(function(){ location.reload(); }, 1200);
+    console.table(candidates);
+    toast("Read-only audit complete", candidates.length +
+      " possible orphan records logged. Nothing was deleted.", "info");
+    return candidates;
   }catch(err){
-    console.error("[cleanupDemoCourses]", err);
-    toast("Cleanup failed", err.message, "error");
+    console.error("[auditPotentialDuplicateCourses]", err);
+    toast("Audit failed", err.message || "Unable to inspect courses.", "error");
+    return [];
   }
 };
-console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses");
+console.log("Read-only course audit available: auditPotentialDuplicateCourses(). No records are deleted.");
 </script>
 
 <script>
@@ -62510,7 +62481,7 @@ console.log("✅ Multi-language helpers loaded");
           }
           if(deptSel){
             const deps=await firestoreRead('departments',{forceRefresh:true}).catch(()=>[]);
-            const eligible=deps.filter(d=>u.role==='superAdmin' || !d.churchId || d.churchId===u.churchId || (u.role==='teacher' && d.id===existing.departmentId));
+            const eligible=deps.filter(d=>u.role==='superAdmin' || !d.churchId || d.churchId==='__global__' || d.isGlobal===true || d.churchId===u.churchId || (u.role==='teacher' && d.id===existing.departmentId));
             deptSel.innerHTML='<option value="">— Select department —</option>'+eligible.map(d=>'<option value="'+safe(d.id)+'" '+(existing.departmentId===d.id?'selected':'')+'>'+safe(d.name || d.title || d.id)+'</option>').join('');
             deptSel.addEventListener('change',refillTeachers);
           }
@@ -62538,15 +62509,18 @@ console.log("✅ Multi-language helpers loaded");
     try{
       const title=form.title.value.trim(), desc=form.desc.value.trim(), level=form.level.value;
       const weeks=parseInt(form.weeks.value,10)||6;
-      const departmentId=form.departmentId.value;
+      const departmentField = $('courseDepartment') || form.querySelector('[name="departmentId"]');
+      const departmentId = departmentField ? String(departmentField.value || '').trim() : '';
       if(title.length<3||desc.length<10||!departmentId){toast('Check course details','Enter a title, description and department.','error');return;}
       const existing=isEdit?await getCourseById(existingId):null;
       if(isEdit && (!existing || !(await canManageCourse(existing,u)))){toast('Access denied','You may view this course but cannot edit it.','error');return;}
       let targetChurchIds=[],allChurches=false,churchId=u.churchId||'';
       if(u.role==='superAdmin'){
         allChurches=!!($('courseAllChurches')&&$('courseAllChurches').checked);
-        targetChurchIds=$('courseTargetChurches')?Array.from($('courseTargetChurches').selectedOptions).map(o=>o.value):[];
+        const churchPicker = $('courseTargetChurches');
+        targetChurchIds=churchPicker?Array.from(churchPicker.selectedOptions).map(o=>String(o.value || '').trim()).filter(Boolean):[];
         if(!allChurches && !targetChurchIds.length){toast('Select churches','Choose one or more churches or select all churches.','error');return;}
+        if(!allChurches && churchPicker && targetChurchIds.some(id=>!Array.from(churchPicker.options).some(o=>o.value===id))){toast('Invalid church selection','Refresh the church list and select valid churches.','error');return;}
         churchId=allChurches?'__global__':targetChurchIds[0];
       }else if(u.role==='churchAdmin'){
         if(!u.churchId){toast('Church missing','Your account is not assigned to a church.','error');return;}
@@ -62576,6 +62550,7 @@ console.log("✅ Multi-language helpers loaded");
       const payload={
         id:courseId,title,desc,level,weeks,weeksCount:weeks,departmentId,
         departmentName:dep?(dep.name||dep.title||''):'',
+        departmentChurchId:dep?(dep.churchId||''):'',
         churchId, targetChurchIds, allChurches,
         teacherEmail:teacherEmail||'', teacherEmails: teacherEmails.length?teacherEmails:(teacherEmail?[teacherEmail]:[]),
         coverImageUrl,videoUrl,gallery,status,
@@ -62620,6 +62595,8 @@ console.log("✅ Multi-language helpers loaded");
   window.listTeacherCourses = window.getVisibleCoursesForTeacher;
   window.listChurchCourses = async function(churchId){
     const all=await loadCourses();
+    /* Empty scope is intentionally reserved for Super Admin platform-wide view. */
+    if(!churchId) return all;
     return all.filter(c=>targetsChurch(c,churchId));
   };
 
