@@ -14895,13 +14895,19 @@ window.submitAddUser = async function(){
 window.openEditUserModal = async function(uid){
   if(!requireSuperAdmin()) return;
 
-  const userDoc = (window.__allSuperUsers || []).find(function(x){
-    return (x.uid || x.id) === uid;
+  let userDoc = (window.__allSuperUsers || []).find(function(x){
+    return String(x.id || x.docId || "") === String(uid) || String(x.uid || "") === String(uid);
   });
   if(!userDoc){
-    toast("Not found", "User does not exist.", "error");
-    return;
+    try{
+      const direct=await FB.db.collection("users").doc(String(uid)).get();
+      if(direct.exists) userDoc=Object.assign({id:direct.id,docId:direct.id},direct.data());
+      if(!userDoc){const q=await FB.db.collection("users").where("uid","==",String(uid)).limit(1).get();if(!q.empty)userDoc=Object.assign({id:q.docs[0].id,docId:q.docs[0].id},q.docs[0].data());}
+      if(userDoc)window.__allSuperUsers=(window.__allSuperUsers||[]).filter(function(x){return String(x.id||x.docId||"")!==String(userDoc.id||userDoc.docId||"")&&String(x.uid||"")!==String(userDoc.uid||"");}).concat([userDoc]);
+    }catch(fetchErr){console.warn("[openEditUserModal] recovery",fetchErr);}
   }
+  if(!userDoc){toast("User not found","Could not find this user by document ID or UID. Refresh the user list and try again.","error");return;}
+  const editDocumentId=String(userDoc.id||userDoc.docId||uid);
 
   let churches = [];
   let departments = [];
@@ -14917,7 +14923,7 @@ window.openEditUserModal = async function(uid){
   }).join("");
 
   const filteredDepts = userDoc.churchId
-    ? departments.filter(function(d){ return d.churchId === userDoc.churchId; })
+    ? departments.filter(function(d){ return !d.churchId || d.churchId === userDoc.churchId || (Array.isArray(d.churchIds) && d.churchIds.includes(userDoc.churchId)); })
     : departments;
 
   const deptOptions = filteredDepts.map(function(d){
@@ -14945,7 +14951,7 @@ window.openEditUserModal = async function(uid){
           + '</div>'
           + '<form id="editUserForm" '
             + 'onsubmit="event.preventDefault();submitEditUser(\'' 
-            + esc(uid) + '\');" style="padding:24px">'
+            + esc(editDocumentId) + '\');" style="padding:24px">'
 
             + '<div class="reg-grid-2">'
               + '<div class="form-group"><label>Full Name *</label>'
@@ -15046,7 +15052,11 @@ window.submitEditUser = async function(uid){
   btn.innerHTML = '<span class="loader"></span> Saving…';
 
   try{
-    await FB.db.collection("users").doc(uid).update({
+    const userRef = FB.db.collection("users").doc(String(uid));
+    const existingUserSnap = await userRef.get();
+    if(!existingUserSnap.exists) throw new Error("The user document was not found. Refresh the user list and reopen Edit.");
+    await userRef.update({
+      uid:          existingUserSnap.data().uid || String(uid),
       name:         newName,
       email:        newEmail,
       role:         newRole,
@@ -16036,10 +16046,11 @@ window.openAddChurchModal = function(){
             + '<div class="reg-grid-2">'
               + '<div class="form-group"><label>Church Name *</label>'
                 + '<input name="name" required minlength="3"></div>'
-              + '<div class="form-group"><label>Church Code *</label>'
-                + '<input name="initials" required maxlength="4" '
-                  + 'placeholder="e.g. KC" '
-                  + 'style="text-transform:uppercase"></div>'
+              + '<div class="form-group"><label>Church Code</label>'
+                + '<input name="initials" maxlength="6" '
+                  + 'placeholder="Generated automatically" '
+                  + 'style="text-transform:uppercase">'
+                + '<small class="muted">A full SDA-XXX-001 code is generated using the same system as church registration.</small></div>'
             + '</div>'
 
             + '<div class="form-group"><label>Location</label>'
@@ -16075,38 +16086,26 @@ window.closeChurchModal = function(){
 };
 
 window.submitChurchForm = async function(){
-  const form = document.getElementById("churchForm");
-  if(!form) return;
-
-  const name     = form.name.value.trim();
-  const initials = form.initials.value.trim().toUpperCase();
-
-  if(!name || !initials){
-    toast("Missing", "Name and code are required.", "error");
-    return;
-  }
-
-  const churchId = "CH" + Date.now();
+  const form=document.getElementById("churchForm"); if(!form)return;
+  if(!requireSuperAdmin())return;
+  const name=form.name.value.trim();
+  if(name.length<3){toast("Invalid church name","Enter at least 3 characters.","error");return;}
+  const btn=form.querySelector('button[type="submit"]'); const original=btn?btn.innerHTML:"Create Church";
+  if(btn){btn.disabled=true;btn.innerHTML='<span class="loader"></span> Creating…';}
   try{
+    const generated=await generateChurchCode(name), code=generated.code, initials=generated.namePart;
+    const dup=await FB.db.collection("churches").where("code","==",code).limit(1).get();
+    if(!dup.empty)throw new Error("This church code already exists. Check the church code counter and retry.");
+    const churchId="CH"+Date.now();
     await FB.db.collection("churches").doc(churchId).set({
-      id:          churchId,
-      name:        name,
-      initials:    initials,
-      location:    form.location.value.trim(),
-      adminEmail:  form.adminEmail.value.trim().toLowerCase(),
-      phone:       form.phone.value.trim(),
-      status:      "ACTIVE",
-      createdAt:   firebase.firestore.FieldValue.serverTimestamp(),
-      createdBy:   currentUser().user
+      id:churchId, churchId:churchId, name:name, initials:initials, code:code,
+      location:form.location.value.trim(), adminEmail:form.adminEmail.value.trim().toLowerCase(),
+      phone:form.phone.value.trim(), status:"ACTIVE",
+      createdAt:firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy:(currentUser()&&(currentUser().email||currentUser().user))||"superAdmin"
     });
-
-    firestoreClearCache("churches");
-    toast("Church created", name, "success");
-    closeChurchModal();
-    go("super-churches");
-  }catch(err){
-    toast("Failed", err.message, "error");
-  }
+    firestoreClearCache("churches");toast("Church created",name+" · "+code,"success");closeChurchModal();go("super-churches");
+  }catch(err){console.error("[submitChurchForm]",err);toast("Failed to create church",err.message||"Please try again.","error");if(btn){btn.disabled=false;btn.innerHTML=original;}}
 };
 
 window.openEditChurchModal = function(id){
@@ -34868,10 +34867,10 @@ window.submitRegisterChurch = async function(form){
 
   try{
     /* ── DUPLICATE CODE CHECK ── */
-    const dup = await FB.db.collection("churches")
-      .where("initials", "==", code)
-      .limit(1)
-      .get();
+    const shortInitialsForCheck = extractShortInitials(code);
+    let dup = await FB.db.collection("churches").where("code", "==", code).limit(1).get();
+    if(dup.empty) dup = await FB.db.collection("churches").where("initials", "==", code).limit(1).get();
+    if(dup.empty) dup = await FB.db.collection("churches").where("initials", "==", shortInitialsForCheck).limit(1).get();
     if(!dup.empty){
       const existing = dup.docs[0].data();
       const status = existing.status || "PENDING_APPROVAL";
@@ -62766,6 +62765,35 @@ console.log("✅ Multi-language helpers loaded");
 })();
 
 </script>
+<!-- SDA PLATFORM CONSISTENCY PATCH — Church/course/department counts + edit recovery -->
+<script>
+(function SDAChurchConsistencyPatch(){
+  if(window.__sdaChurchConsistencyPatch)return;window.__sdaChurchConsistencyPatch=true;
+  function targets(c,id){return !!c&&!!id&&(c.allChurches===true||c.churchId===id||(Array.isArray(c.targetChurchIds)&&c.targetChurchIds.indexOf(id)!==-1));}
+  window.sdaCourseTargetsChurch=targets;
+  ROUTES["super-churches"]=function(){
+    const u=requireSuperAdmin();if(!u)return "";
+    setTimeout(async function(){const host=document.getElementById("superChurchesHost");if(!host)return;
+      try{
+        const results=await Promise.all([firestoreRead("churches",{forceRefresh:true}),firestoreRead("users",{forceRefresh:true}),firestoreRead("courses",{forceRefresh:true}),firestoreRead("departments",{forceRefresh:true})]);
+        const churches=results[0],users=results[1],courses=results[2],departments=results[3];
+        window.__allChurches=churches;window.__allChurchUsers=users;window.__allChurchCourses=courses;window.__allChurchDepartments=departments;
+        if(!churches.length){host.innerHTML='<div class="empty"><h3>No churches yet</h3><button class="btn btn-primary" onclick="openAddChurchModal()">Create First Church</button></div>';return;}
+        host.innerHTML='<div class="reg-block" style="padding:0;overflow:auto"><table class="data" style="margin:0;min-width:760px"><thead><tr><th>Church</th><th>Location / Code</th><th>Users</th><th>Departments</th><th>Courses</th><th>Actions</th></tr></thead><tbody>'+churches.map(function(c){
+          const id=String(c.id||c.churchId||"");const uc=users.filter(function(x){return String(x.churchId||"")===id;}).length;
+          const ds=departments.filter(function(d){return String(d.churchId||"")===id||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(id)!==-1);});const cs=courses.filter(function(x){return targets(x,id);});
+          return '<tr data-church-id="'+esc(id)+'"><td><strong>'+esc(c.name||"Unnamed church")+'</strong><br><small class="muted">ID: '+esc(id)+'</small><br><small>'+esc(c.status||"ACTIVE")+'</small></td><td>'+esc(c.location||"—")+'<br><strong>'+esc(c.code||c.initials||"No code")+'</strong></td><td>'+uc+'</td><td><strong>'+ds.length+'</strong> '+(!ds.length?'<span style="color:#B45309">· None assigned</span>':'')+'</td><td><strong>'+cs.length+'</strong> '+(!cs.length?'<span style="color:#B45309">· None assigned</span>':'')+'</td><td style="white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="openEditChurchModal(\''+esc(id)+'\')" title="Edit church"><i class="fa-solid fa-pen"></i></button> <button class="btn btn-outline btn-sm" onclick="sdaShowChurchAssignments(\''+esc(id)+'\')"><i class="fa-solid fa-list-check"></i> Inspect</button></td></tr>';
+        }).join("")+'</tbody></table></div>';
+      }catch(err){console.error("[Church Management]",err);host.innerHTML='<div class="empty"><h3>Could not load church data</h3><p>'+esc(err.message||"Check Firestore permissions and refresh.")+'</p></div>';}
+    },40);
+    return '<section class="page-header"><div class="container">'+breadcrumbs([{label:"Home",route:"home"},{label:"Dashboard",route:"portal-superAdmin"},{label:"Churches"}])+'<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap"><div><h1 style="margin:0">Church Management</h1><p style="margin:8px 0 0;opacity:.9">Review each church, its departments, and its assigned courses.</p></div><button class="btn btn-gold" onclick="openAddChurchModal()"><i class="fa-solid fa-plus"></i> Add Church</button></div></div></section><section class="section container" style="max-width:1250px"><div id="superChurchesHost"><div class="empty"><span class="loader"></span><h3>Loading churches…</h3></div></div></section>';
+  };
+  window.sdaShowChurchAssignments=function(id){const c=(window.__allChurches||[]).find(function(x){return String(x.id||x.churchId)===String(id);});const ds=(window.__allChurchDepartments||[]).filter(function(d){return String(d.churchId||"")===String(id)||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(id)!==-1);});const cs=(window.__allChurchCourses||[]).filter(function(x){return targets(x,id);});alert((c?c.name:"Church")+"\n\nDEPARTMENTS ("+ds.length+")\n"+(ds.length?ds.map(function(d){return "• "+(d.name||d.title||d.id);}).join("\n"):"No church-specific departments assigned.")+"\n\nCOURSES ("+cs.length+")\n"+(cs.length?cs.map(function(x){return "• "+(x.title||x.name||x.id)+" ["+(x.status||"no status")+"]";}).join("\n"):"No courses target this church."));};
+  document.addEventListener("change",async function(ev){const t=ev.target;if(!t||!t.closest||!t.closest("#editUserForm")||t.name!=="churchId")return;const sel=t.closest("#editUserForm").querySelector('[name="departmentId"]');if(!sel)return;try{const ds=await firestoreRead("departments",{forceRefresh:true}),old=sel.value,filtered=ds.filter(function(d){return !d.churchId||d.churchId===t.value||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(t.value)!==-1);});sel.innerHTML='<option value="">— Select department —</option>'+filtered.map(function(d){return '<option value="'+esc(d.id)+'"'+(d.id===old?' selected':'')+'>'+esc(d.name||d.title||d.id)+'</option>';}).join("");}catch(e){console.warn("[department dropdown]",e);}});
+  console.log("SDA church consistency patch installed");
+})();
+</script>
+
 </body>
 </html>
 
