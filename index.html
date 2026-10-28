@@ -7274,8 +7274,8 @@ async function loadStudentDashboard(){
               recentGrades.push({
                 assignmentTitle: a.title,
                 courseTitle:     item.course.title,
-                score:           sub.score || 0,
-                maxScore:        a.maxScore || 100,
+                score:           Number(sub.score != null ? sub.score : 0),
+                maxScore:        Number(a.maxScore != null ? a.maxScore : 100),
                 gradedAt:        gradedAt
               });
             }
@@ -17261,36 +17261,43 @@ console.log("✅ POST-G consolidated script loaded (v2)");
 
 /* ── Student enrollments ────────────────────────────────── */
 async function listMyEnrollments(){
-  const u = currentUser();
-  if(!u || !u.user){
-    console.warn("[listMyEnrollments] No current user");
-    return [];
+  const u = typeof window.currentUser === "function" ? window.currentUser() : null;
+  const authUser = (window.FB && FB.auth) ? FB.auth.currentUser : null;
+  const email = String((authUser && authUser.email) || (u && (u.email || u.user)) || "")
+    .trim().toLowerCase();
+
+  window.__lastStudentEnrollmentError = null;
+  if(!u || !u.uid || !email){
+    const err = new Error("Your student session is incomplete. Sign out, then sign in again.");
+    window.__lastStudentEnrollmentError = err;
+    throw err;
+  }
+  if(!window.FB || !FB.db){
+    const err = new Error("Firebase is not ready. Refresh the page and try again.");
+    window.__lastStudentEnrollmentError = err;
+    throw err;
   }
 
-  const email = u.user.toLowerCase().trim();
-
   try{
+    /* The Firestore rules allow signed-in enrollment reads. Query with the
+       normalized account email used by enrollment records. */
     const snap = await FB.db.collection("enrollments")
-      .where("studentEmail", "==", email)
-      .get();
+      .where("studentEmail", "==", email).get();
 
     const list = snap.docs.map(function(d){
       return Object.assign({}, d.data(), { id: d.id });
     });
-
     const active = list.filter(function(e){
-      return !e.status || e.status === "ACTIVE";
+      return !e.status || String(e.status).trim().toUpperCase() === "ACTIVE";
     });
 
     console.log("[listMyEnrollments] email:", email,
-      "| total:", list.length,
-      "| active:", active.length);
-
+      "| total:", list.length, "| active:", active.length);
     return active;
   }catch(err){
     window.__lastStudentEnrollmentError = err;
-    console.error("[listMyEnrollments]", err.code, err.message);
-    return [];
+    console.error("[listMyEnrollments]", err && err.code, err && err.message);
+    throw err; // Don't misreport a Firestore failure as "not enrolled".
   }
 }
 window.listMyEnrollments = listMyEnrollments;
