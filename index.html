@@ -7167,7 +7167,11 @@ async function loadStudentDashboard(){
 
   try{
     /* 1. Enrollments */
+    window.__lastStudentEnrollmentError = null;
     const myEnrollments = await listMyEnrollments();
+    if(window.__lastStudentEnrollmentError){
+      throw window.__lastStudentEnrollmentError;
+    }
 
     /* 2. Load each course + its lesson counts (parallel) */
     const courseData = await Promise.all(myEnrollments.map(async function(enr){
@@ -17266,6 +17270,7 @@ async function listMyEnrollments(){
 
     return active;
   }catch(err){
+    window.__lastStudentEnrollmentError = err;
     console.error("[listMyEnrollments]", err.code, err.message);
     return [];
   }
@@ -62825,6 +62830,297 @@ console.log("✅ Multi-language helpers loaded");
   console.info('[SDA] Multi-church course assignment compatibility patch ready');
 })();
 </script>
+
+
+<!-- SDA Learning Platform Step 2: teacher profile editing + student dashboard role resolution -->
+<script>
+(function(){
+  "use strict";
+
+  function sdaUser(){ return typeof currentUser === "function" ? currentUser() : null; }
+  function sdaNorm(v){ return String(v || "").trim().toLowerCase(); }
+  function sdaEsc(v){ return typeof esc === "function" ? esc(v == null ? "" : String(v)) : String(v == null ? "" : v).replace(/[&<>"']/g, function(c){return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c];}); }
+  function sdaToast(title,msg,type){ if(typeof toast === "function") toast(title,msg,type || "info"); else console.log(title,msg); }
+  function sdaClose(){ const el=document.getElementById("editUserModal"); if(el) el.remove(); }
+
+  async function resolveUserProfile(key){
+    const u=sdaUser();
+    if(!u || (u.role!=="superAdmin" && u.role!=="churchAdmin")) throw new Error("Only Super Admin or Church Admin can edit teacher profiles.");
+    const needle=String(key || "");
+    const caches=[window.__adminTeachers || [], window.__allSuperUsers || []];
+    let candidate=null;
+    caches.some(function(list){
+      candidate=list.find(function(x){return String(x.uid || "")===needle || String(x.id || "")===needle || sdaNorm(x.email)===sdaNorm(needle);}) || null;
+      return !!candidate;
+    });
+    if(!candidate){
+      try{
+        const users=await firestoreRead("users",{forceRefresh:true});
+        candidate=users.find(function(x){return String(x.uid || "")===needle || String(x.id || "")===needle || sdaNorm(x.email)===sdaNorm(needle);}) || null;
+      }catch(e){ console.warn("[teacher profile] user list lookup:",e.message); }
+    }
+    /* Resolve the real Firestore document ID independently from any stored uid/id field. */
+    let snap=null;
+    try{ snap=await FB.db.collection("users").doc(needle).get(); }catch(e){}
+    if((!snap || !snap.exists) && candidate && candidate.uid){
+      try{ snap=await FB.db.collection("users").doc(String(candidate.uid)).get(); }catch(e){}
+    }
+    if((!snap || !snap.exists) && candidate && candidate.email){
+      try{ const q=await FB.db.collection("users").where("email","==",sdaNorm(candidate.email)).limit(1).get(); if(!q.empty) snap=q.docs[0]; }catch(e){}
+    }
+    if((!snap || !snap.exists) && candidate && candidate.email){
+      try{ const q=await FB.db.collection("users").where("email","==",candidate.email).limit(1).get(); if(!q.empty) snap=q.docs[0]; }catch(e){}
+    }
+    if(snap && snap.exists){
+      const data=snap.data() || {};
+      candidate=Object.assign({},data,{id:snap.id,_docId:snap.id,uid:data.uid || snap.id});
+    }else if(candidate){
+      candidate=Object.assign({},candidate,{_docId:candidate._docId || candidate.id});
+    }
+    if(!candidate || !candidate._docId) throw new Error("Teacher profile was not found in the users collection. Refresh Teacher Management and try again.");
+    if(u.role==="churchAdmin" && candidate.role!=="teacher") throw new Error("Church Admins can edit teacher profiles only.");
+    if(u.role==="churchAdmin" && candidate.churchId && candidate.churchId!==u.churchId) throw new Error("You can edit teacher profiles only within your own church.");
+    return candidate;
+  }
+
+  window.openEditUserModal=async function(uidOrId){
+    const admin=sdaUser();
+    if(!admin || (admin.role!=="superAdmin" && admin.role!=="churchAdmin")){
+      sdaToast("Access denied","Only authorized administrators can edit teacher profiles.","error"); return;
+    }
+    try{
+      const userDoc=await resolveUserProfile(uidOrId);
+      const [churches,departments]=await Promise.all([
+        firestoreRead("churches",{forceRefresh:true}).catch(function(){return [];}),
+        firestoreRead("departments",{forceRefresh:true}).catch(function(){return [];})
+      ]);
+      const availableChurches=admin.role==="superAdmin" ? churches : churches.filter(function(c){return c.id===admin.churchId;});
+      const churchId=admin.role==="churchAdmin" ? (admin.churchId || userDoc.churchId || "") : (userDoc.churchId || "");
+      const filteredDepts=departments.filter(function(d){return !d.churchId || d.churchId===churchId;});
+      const churchOptions=availableChurches.map(function(c){return '<option value="'+sdaEsc(c.id)+'"'+(churchId===c.id?' selected':'')+'>'+sdaEsc(c.name || c.id)+'</option>';}).join("");
+      const deptOptions=filteredDepts.map(function(d){return '<option value="'+sdaEsc(d.id)+'"'+((userDoc.departmentId || "")===(d.id || "")?' selected':'')+'>'+sdaEsc(d.name || d.id)+'</option>';}).join("");
+      const adminCanChangeRole=admin.role==="superAdmin";
+      const html='<div id="editUserModal" class="reg-card-modal">'
+        +'<div class="reg-card-modal-backdrop" onclick="closeEditUserModal()"></div>'
+        +'<div class="reg-card-modal-inner" style="max-width:640px;max-height:92vh;overflow:auto">'
+        +'<button class="reg-card-modal-close" onclick="closeEditUserModal()"><i class="fa-solid fa-xmark"></i></button>'
+        +'<div style="background:#fff;border-radius:20px;overflow:hidden;border:1px solid var(--border)">'
+        +'<div style="background:linear-gradient(135deg,#0E45EB,#4A78FF);color:#fff;padding:20px 26px">'
+        +'<div style="font-weight:800;font-size:1.05rem"><i class="fa-solid fa-user-pen"></i> Edit '+(userDoc.role==='teacher'?'Teacher':'User')+' Profile</div>'
+        +'<div style="font-size:.82rem;opacity:.92;margin-top:4px">Profile changes are saved to the teacher record. Course and department assignments are managed separately.</div>'
+        +'</div><form id="editUserForm" style="padding:24px" onsubmit="event.preventDefault();submitEditUser(\''+sdaEsc(userDoc._docId)+'\')">'
+        +'<div class="reg-grid-2">'
+        +'<div class="form-group"><label>Full Name *</label><input name="name" required minlength="3" maxlength="100" value="'+sdaEsc(userDoc.name || "")+'"></div>'
+        +'<div class="form-group"><label>Email (account identity)</label><input name="email" type="email" value="'+sdaEsc(userDoc.email || "")+'" readonly></div>'
+        +'</div><div class="reg-grid-2">'
+        +'<div class="form-group"><label>Phone</label><input name="phone" type="tel" value="'+sdaEsc(userDoc.phone || "")+'"></div>'
+        +'<div class="form-group"><label>Gender</label><select name="gender"><option value="">Not specified</option><option value="Male"'+(userDoc.gender==="Male"?' selected':'')+'>Male</option><option value="Female"'+(userDoc.gender==="Female"?' selected':'')+'>Female</option><option value="Other"'+(userDoc.gender==="Other"?' selected':'')+'>Other</option></select></div>'
+        +'</div><div class="reg-grid-2">'
+        +'<div class="form-group"><label>Church</label><select name="churchId" '+(admin.role==="churchAdmin"?'disabled':'')+'>'+churchOptions+'</select>'
+        +(admin.role==="churchAdmin"?'<input type="hidden" name="churchId" value="'+sdaEsc(churchId)+'">':'')+'</div>'
+        +'<div class="form-group"><label>Primary Department</label><select name="departmentId"><option value="">No primary department</option>'+deptOptions+'</select></div>'
+        +'</div>'
+        +(adminCanChangeRole?'<div class="reg-grid-2"><div class="form-group"><label>Role</label><select name="role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="churchAdmin">Church Admin</option><option value="superAdmin">Super Admin</option></select></div><div class="form-group"><label>Account Status</label><select name="status"><option value="ACTIVE"'+(userDoc.status!=="DISABLED"?' selected':'')+'>Active</option><option value="DISABLED"'+(userDoc.status==="DISABLED"?' selected':'')+'>Disabled</option><option value="PENDING_APPROVAL"'+(userDoc.status==="PENDING_APPROVAL"?' selected':'')+'>Pending approval</option></select></div></div>':'<p class="muted" style="font-size:.8rem">Your role cannot change teacher roles or account status. Only the Super Admin can do that.</p>')
+        +'<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:22px"><button type="button" class="btn btn-outline" onclick="closeEditUserModal()">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save Profile</button></div>'
+        +'</form></div></div></div>';
+      sdaClose(); document.body.insertAdjacentHTML("beforeend",html);
+      const form=document.getElementById("editUserForm");
+      if(form){
+        form.dataset.docId=userDoc._docId;
+        form.dataset.email=userDoc.email || "";
+        form.dataset.originalChurchId=userDoc.churchId || "";
+        form.dataset.originalRole=userDoc.role || "teacher";
+        form.dataset.canChangeRole=adminCanChangeRole ? "1" : "0";
+        form.dataset.adminRole=admin.role;
+      }
+    }catch(err){ console.error("[openEditUserModal]",err); sdaToast("Could not open profile",err.message,"error"); }
+  };
+
+  window.closeEditUserModal=function(){ sdaClose(); };
+
+  window.submitEditUser=async function(docId){
+    const form=document.getElementById("editUserForm");
+    if(!form) return;
+    const admin=sdaUser();
+    if(!admin || (admin.role!=="superAdmin" && admin.role!=="churchAdmin")){sdaToast("Access denied","Administrator access is required.","error");return;}
+    const name=(form.elements.name.value || "").trim();
+    const phone=(form.elements.phone.value || "").trim();
+    const gender=(form.elements.gender.value || "").trim();
+    const departmentId=(form.elements.departmentId.value || "").trim();
+    const churchId=admin.role==="churchAdmin" ? (admin.churchId || "") : (form.elements.churchId.value || "").trim();
+    if(name.length<3){sdaToast("Check name","Enter the teacher's full name.","error");return;}
+    const btn=form.querySelector('button[type="submit"]'); const original=btn ? btn.innerHTML : "Save Profile";
+    if(btn){btn.disabled=true;btn.innerHTML='<span class="loader"></span> Saving…';}
+    try{
+      const ref=FB.db.collection("users").doc(docId || form.dataset.docId);
+      const snap=await ref.get();
+      if(!snap.exists) throw new Error("The teacher profile document no longer exists. Refresh Teacher Management.");
+      const old=snap.data() || {};
+      if(admin.role==="churchAdmin" && old.churchId && old.churchId!==admin.churchId) throw new Error("You can edit only teachers in your own church.");
+      const payload={name:name,phone:phone,gender:gender,churchId:churchId,departmentId:departmentId,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:admin.user};
+      if(admin.role==="superAdmin"){
+        const role=(form.elements.role && form.elements.role.value) || old.role;
+        const status=(form.elements.status && form.elements.status.value) || old.status || "ACTIVE";
+        payload.role=role; payload.status=status;
+      }
+      await ref.update(payload);
+      if(typeof firestoreClearCache==="function") firestoreClearCache("users");
+      /* Keep assignment church scope consistent; moving churches clears old church-bound course/department IDs. */
+      if(admin.role==="superAdmin" && old.churchId!==churchId && old.role==="teacher"){
+        try{
+          const as=await FB.db.collection("teacherAssignments").where("teacherEmail","==",sdaNorm(old.email)).get();
+          for(const d of as.docs){await d.ref.set({churchId:churchId,departmentIds:[],courseIds:[],updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:admin.user},{merge:true});}
+        }catch(assignErr){console.warn("[teacher profile] assignment sync failed",assignErr);}
+      }
+      sdaClose();
+      sdaToast("Profile saved","Teacher profile changes have been saved.","success");
+      if(typeof firestoreClearCache==="function") firestoreClearCache("teacherAssignments");
+      if(typeof loadAdminTeachers==="function") await loadAdminTeachers();
+      if(document.getElementById("usersTableBody") && admin.role==="superAdmin"){
+        try{const users=await firestoreRead("users",{forceRefresh:true});window.__allSuperUsers=users;document.getElementById("usersTableBody").innerHTML=renderUserRows(users,__userFilterRole,__userSearchQuery);}catch(e){}
+      }
+      if(typeof refreshSession==="function" && old.uid===admin.uid) await refreshSession();
+    }catch(err){
+      console.error("[submitEditUser]",err);
+      sdaToast("Save failed",err.message || "Could not save the teacher profile.","error");
+      if(btn){btn.disabled=false;btn.innerHTML=original;}
+    }
+  };
+
+  /* Wait for the Firestore role profile before routing. The old route redirected immediately
+     when currentUser() returned role:null during auth initialization. */
+  const previousStudentRoute=ROUTES["portal-student"];
+  ROUTES["portal-student"]=function(){
+    const u=sdaUser();
+    if(u && !u.role){
+      setTimeout(async function(){
+        try{
+          const profile=typeof refreshSession==="function" ? await refreshSession() : null;
+          const resolved=sdaUser();
+          const role=(profile && profile.role) || (resolved && resolved.role);
+          if(role) go(role==="student" ? "portal-student" : "portal-"+role);
+          else{
+            const host=document.getElementById("studentDashHost");
+            if(host) host.innerHTML='<div class="empty"><h3>Student profile not loaded</h3><p class="muted">Your sign-in succeeded, but no role was found in your Firestore user profile. Contact the administrator.</p><button class="btn btn-outline" onclick="go(\'login\')">Back to sign in</button></div>';
+          }
+        }catch(err){console.error("[portal-student role resolution]",err);sdaToast("Dashboard unavailable",err.message,"error");}
+      },80);
+      return '<section class="section container"><div class="empty" style="padding:70px 20px"><span class="loader"></span><h3>Loading your account…</h3><p class="muted">Checking your student profile and access.</p></div></section>';
+    }
+    return typeof previousStudentRoute==="function" ? previousStudentRoute.apply(this,arguments) : '<section class="section container"><div class="empty"><h3>Student dashboard unavailable</h3></div></section>';
+  };
+
+  console.log("[SDA Step 2] Teacher profile editor and student-role resolution installed.");
+})();
+</script>
+
+
+
+<!-- SDA Learning Platform Step 2B: complete teacher-management actions -->
+<script>
+(function(){
+  "use strict";
+  const originalRenderer=window.renderAdminTeachersTable;
+  const originalLoader=window.loadAdminTeachers;
+  function user(){return typeof currentUser==="function"?currentUser():null;}
+  function norm(v){return String(v||"").trim().toLowerCase();}
+  function safe(v){return typeof esc==="function"?esc(v==null?"":String(v)):String(v==null?"":v);}
+  function notify(t,m,k){if(typeof toast==="function")toast(t,m,k||"info");else console.log(t,m);}
+
+  window.renderAdminTeachersTable=function(teachers){
+    const rows=(teachers||[]).map(function(t){
+      const a=t._assignment || null;
+      const active=t.status!=="DISABLED" && t.status!=="INACTIVE";
+      const initials=(t.name||t.email||"?").slice(0,2).toUpperCase();
+      const avatar=t.photoURL?'<img src="'+safe(t.photoURL)+'" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover">':'<div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#CF9B3F,#E7C583);color:#1B2A44;display:flex;align-items:center;justify-content:center;font-weight:800">'+initials+'</div>';
+      const departments=a&&Array.isArray(a.departmentIds)&&a.departmentIds.length?a.departmentIds.map(function(id){return '<span style="display:inline-block;padding:3px 8px;margin:2px;border-radius:999px;background:rgba(110,143,113,.15);font-size:.72rem">'+safe(id)+'</span>';}).join(""):'<span class="muted">—</span>';
+      const courses=a&&Array.isArray(a.courseIds)?a.courseIds.length:0;
+      const status=active?'<span class="badge badge-live">Active</span>':'<span class="badge badge-demo">Inactive</span>';
+      const id=t.uid||t.id||t.email;
+      return '<tr><td><div style="display:flex;align-items:center;gap:10px">'+avatar+'<div><div style="font-weight:700">'+safe(t.name||"Unnamed")+'</div><div class="muted" style="font-size:.75rem">'+safe(t.email||"")+'</div></div></div></td>'
+        +'<td>'+departments+'</td><td><span style="font-weight:700">'+courses+'</span> assigned</td><td>'+status+'</td>'
+        +'<td style="text-align:right;white-space:nowrap;min-width:260px">'
+        +'<button class="btn btn-gold btn-sm" onclick="openAssignTeacherModal(\''+safe(t.email)+'\')" title="Assign departments and courses"><i class="fa-solid fa-diagram-project"></i> Assign</button> '
+        +'<button class="btn btn-outline btn-sm" onclick="openEditUserModal(\''+safe(id)+'\')" title="Edit profile"><i class="fa-solid fa-pen"></i> Edit</button> '
+        +'<button class="btn btn-outline btn-sm" onclick="viewTeacherCourses(\''+safe(t.email)+'\')" title="View assigned courses"><i class="fa-solid fa-book-open"></i></button> '
+        +'<button class="btn btn-outline btn-sm" onclick="toggleTeacherStatus(\''+safe(t.email)+'\')" title="'+(active?'Deactivate':'Activate')+' teacher"><i class="fa-solid '+(active?'fa-user-slash':'fa-user-check')+'"></i></button> '
+        +(a?'<button class="btn btn-outline btn-sm" style="color:#B23A3A;border-color:#B23A3A" onclick="removeTeacherAssignment(\''+safe(a.id)+'\')" title="Remove course and department assignment"><i class="fa-solid fa-link-slash"></i></button>':'')
+        +'</td></tr>';
+    }).join("");
+    return '<div class="reg-block" style="padding:0;overflow:auto"><table class="data" style="margin:0;min-width:900px"><thead><tr><th>Teacher</th><th>Departments</th><th>Courses</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead><tbody>'+(rows||'<tr><td colspan="5">No teachers match this filter.</td></tr>')+'</tbody></table></div>';
+  };
+
+  window.filterAdminTeachers=function(query){
+    const q=norm(query);
+    const list=(window.__adminTeachers||[]).filter(function(t){return !q||norm(t.name).includes(q)||norm(t.email).includes(q)||norm(t.churchId).includes(q)||((t._assignment&&t._assignment.departmentIds)||[]).some(function(x){return norm(x).includes(q);});});
+    const host=document.getElementById("adminTeachersHost");
+    if(host){const controls=host.querySelector('[data-sda-teacher-controls]'); if(controls){const table=host.querySelector('[data-sda-teacher-table]'); if(table)table.innerHTML=window.renderAdminTeachersTable(list); else {const wrap=document.createElement('div');wrap.dataset.sdaTeacherTable='1';wrap.innerHTML=window.renderAdminTeachersTable(list);host.appendChild(wrap);}}}
+  };
+
+  window.viewTeacherCourses=async function(email){
+    const u=user(); if(!u||(u.role!=="superAdmin"&&u.role!=="churchAdmin")){notify("Access denied","Admins only.","error");return;}
+    try{
+      const [assignment,courses,departments]=await Promise.all([getTeacherAssignment(email),firestoreRead("courses",{forceRefresh:true}),firestoreRead("departments",{forceRefresh:true})]);
+      const courseIds=assignment?(assignment.courseIds||[]):[];
+      const deptIds=assignment?(assignment.departmentIds||[]):[];
+      const chosen=courses.filter(function(c){return courseIds.includes(c.id)||(c.departmentId&&deptIds.includes(c.departmentId));}).filter(function(c){return u.role!=="churchAdmin"||c.churchId===u.churchId;});
+      const deptNames=deptIds.map(function(id){const d=departments.find(function(x){return x.id===id;});return d?d.name:id;});
+      const old=document.getElementById("teacherCoursesModal");if(old)old.remove();
+      const html='<div id="teacherCoursesModal" class="reg-card-modal"><div class="reg-card-modal-backdrop" onclick="document.getElementById(\'teacherCoursesModal\').remove()"></div><div class="reg-card-modal-inner" style="max-width:680px;max-height:85vh;overflow:auto"><button class="reg-card-modal-close" onclick="document.getElementById(\'teacherCoursesModal\').remove()"><i class="fa-solid fa-xmark"></i></button><div class="card" style="padding:24px"><h2>Teacher assignments</h2><p class="muted">'+safe(email)+'</p><h3>Departments</h3><p>'+(deptNames.length?deptNames.map(safe).join(', '):'No departments assigned')+'</p><h3>Courses ('+chosen.length+')</h3>'+(chosen.length?'<ul>'+chosen.map(function(c){return '<li style="margin:8px 0"><strong>'+safe(c.title||c.name||c.id)+'</strong> <span class="muted">— '+safe(c.status||'')+'</span></li>';}).join('')+'</ul>':'<p class="muted">No individual or department courses are currently visible to this teacher.</p>')+'<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px"><button class="btn btn-outline" onclick="document.getElementById(\'teacherCoursesModal\').remove()">Close</button><button class="btn btn-primary" onclick="document.getElementById(\'teacherCoursesModal\').remove();openAssignTeacherModal(\''+safe(email)+'\')">Edit assignments</button></div></div></div></div>';
+      document.body.insertAdjacentHTML('beforeend',html);
+    }catch(err){console.error('[viewTeacherCourses]',err);notify('Could not load courses',err.message,'error');}
+  };
+
+  window.toggleTeacherStatus=async function(email){
+    const u=user(); if(!u||(u.role!=="superAdmin"&&u.role!=="churchAdmin")){notify("Access denied","Admins only.","error");return;}
+    if(!confirm("Change active status for teacher "+email+"?"))return;
+    try{
+      let profile=null;
+      const list=(window.__adminTeachers||[]).concat(window.__allSuperUsers||[]);
+      profile=list.find(function(x){return norm(x.email)===norm(email);})||null;
+      let ref=null,snap=null;
+      if(profile){
+        const candidates=[profile.uid,profile._docId,profile.id].filter(Boolean);
+        for(let i=0;i<candidates.length;i++){const candidate=await FB.db.collection('users').doc(String(candidates[i])).get().catch(function(){return null;});if(candidate&&candidate.exists){snap=candidate;break;}}
+      }
+      if(!snap){const q=await FB.db.collection('users').where('email','==',norm(email)).limit(1).get();if(!q.empty)snap=q.docs[0];}
+      if(!snap||!snap.exists)throw new Error('Teacher profile not found. Refresh Teacher Management.');
+      const data=snap.data()||{};
+      if(data.role!=='teacher')throw new Error('This user is no longer a teacher.');
+      if(u.role==='churchAdmin'&&data.churchId&&data.churchId!==u.churchId)throw new Error('You can change status only for teachers in your church.');
+      const next=(data.status==='DISABLED'||data.status==='INACTIVE')?'ACTIVE':'DISABLED';
+      await snap.ref.update({status:next,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:u.user});
+      if(typeof firestoreClearCache==='function')firestoreClearCache('users');
+      notify(next==='ACTIVE'?'Teacher activated':'Teacher deactivated',email,'success');
+      await window.loadAdminTeachers();
+    }catch(err){console.error('[toggleTeacherStatus]',err);notify('Status change failed',err.message,'error');}
+  };
+
+  window.refreshAdminTeachers=async function(){
+    if(typeof firestoreClearCache==='function'){firestoreClearCache('users');firestoreClearCache('teacherAssignments');}
+    await window.loadAdminTeachers();
+  };
+
+  if(typeof originalLoader==='function'){
+    window.loadAdminTeachers=async function(){
+      await originalLoader.apply(this,arguments);
+      const host=document.getElementById('adminTeachersHost');if(!host)return;
+      let controls=host.querySelector('[data-sda-teacher-controls]');
+      if(!controls){
+        controls=document.createElement('div');controls.dataset.sdaTeacherControls='1';
+        controls.style.cssText='display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 16px';
+        controls.innerHTML='<input type="search" aria-label="Search teachers" placeholder="Search name, email, church, or department…" oninput="filterAdminTeachers(this.value)" style="flex:1;min-width:220px;padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--card)"><button class="btn btn-outline" onclick="refreshAdminTeachers()"><i class="fa-solid fa-rotate"></i> Refresh</button>';
+        host.insertBefore(controls,host.firstChild);
+      }
+      Array.from(host.children).forEach(function(child){if(child!==controls)child.remove();});
+      let table=host.querySelector('[data-sda-teacher-table]');
+      if(!table){table=document.createElement('div');table.dataset.sdaTeacherTable='1';host.appendChild(table);}
+      table.innerHTML=window.renderAdminTeachersTable(window.__adminTeachers||[]);
+    };
+  }
+})();
+</script>
+
 </body>
 </html>
 
