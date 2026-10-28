@@ -53,105 +53,113 @@ window.__firestoreCache = {};
    confused with a denied/offline request. Views can use this for honest UI. */
 window.__firestoreReadStatus = window.__firestoreReadStatus || {};
 window.firestoreCollectionStatus = function(name){
-  return window.__firestoreReadStatus[name + ":all"] || null;
+  return window.__firestoreReadStatus[name] || null;
 };
 
+/* Read Firestore without disguising permission/network failures as empty data.
+   Query scopes follow the supplied Firestore Rules v7.19.0. */
 async function firestoreRead(collectionName, options){
   options = Object.assign({}, options || {});
-  /* Firestore rules require Church Admin application reads to be scoped
-     to their own church. Apply the scope before issuing the query. */
+  window.__firestoreReadStatus = window.__firestoreReadStatus || {};
   const sessionUser = (typeof window.currentUser === "function") ? window.currentUser() : null;
-  if(!options.where && sessionUser){
-    if(collectionName === "applications" && sessionUser.role === "churchAdmin" && sessionUser.churchId){
-      options.where = ["churchId", "==", sessionUser.churchId];
-    }else if(collectionName === "users"){
-      if((sessionUser.role === "churchAdmin" || sessionUser.role === "teacher") && sessionUser.churchId){
-        options.where = ["churchId", "==", sessionUser.churchId];
-      }else if(sessionUser.role === "student" || !sessionUser.role){
-        options.where = ["uid", "==", sessionUser.uid];
+  const isAdmin = !!(sessionUser && sessionUser.role === "superAdmin");
+  let directUserDoc = false;
+
+  if(sessionUser && collectionName === "users"){
+    if(sessionUser.role === "churchAdmin" || sessionUser.role === "teacher"){
+      if(!sessionUser.churchId){
+        const err = new Error("This account has no churchId; refusing an unscoped users query.");
+        err.code = "app/missing-church-scope";
+        window.__firestoreReadStatus[collectionName] = {state:"error", code:err.code, message:err.message, at:Date.now()};
+        console.error("[firestoreRead]", err.message);
+        if(typeof window.toast === "function") window.toast("Cannot load users", "Your account is not linked to a church. Contact the Super Admin.", "error");
+        return [];
       }
+      options.where = ["churchId", "==", sessionUser.churchId];
+    } else if(!isAdmin){
+      if(!sessionUser.uid){
+        const err = new Error("Signed-in account has no UID; refusing an unscoped users query.");
+        err.code = "app/missing-user-scope";
+        window.__firestoreReadStatus[collectionName] = {state:"error", code:err.code, message:err.message, at:Date.now()};
+        console.error("[firestoreRead]", err.message);
+        return [];
+      }
+      directUserDoc = true;
+      options.where = null;
     }
   }
-  const cacheKey = collectionName + ":" + (options.where || "all");
 
-  /* Return cached value if fresh (unless forceRefresh) */
-  if(!options.forceRefresh && window.__firestoreCache[cacheKey]){
+  if(sessionUser && collectionName === "applications" && sessionUser.role === "churchAdmin"){
+    if(!sessionUser.churchId){
+      const err = new Error("Church Admin account has no churchId; refusing an unscoped applications query.");
+      err.code = "app/missing-church-scope";
+      window.__firestoreReadStatus[collectionName] = {state:"error", code:err.code, message:err.message, at:Date.now()};
+      console.error("[firestoreRead]", err.message);
+      if(typeof window.toast === "function") window.toast("Cannot load applications", "Your account is not linked to a church. Contact the Super Admin.", "error");
+      return [];
+    }
+    options.where = ["churchId", "==", sessionUser.churchId];
+  } else if(sessionUser && collectionName === "applications" && !isAdmin){
+    /* The rules permit applicants to read their own application by email. */
+    options.where = ["email", "==", (sessionUser.user || "").toLowerCase()];
+  }
+
+  const cacheKey = [collectionName, directUserDoc ? ("doc:" + sessionUser.uid) : JSON.stringify(options.where || null), JSON.stringify(options.orderBy || null), options.limit || null].join(":");
+  if(!options.forceRefresh && Object.prototype.hasOwnProperty.call(window.__firestoreCache, cacheKey)){
     return window.__firestoreCache[cacheKey];
   }
 
   if(!window.FB || !FB.db){
-    const error = new Error("Firebase is not ready; live " + collectionName + " records could not be loaded.");
-    window.__firestoreReadStatus[cacheKey] = {
-      state: "error", collection: collectionName, message: error.message,
-      updatedAt: new Date().toISOString()
-    };
-    console.error("[firestoreRead]", error.message);
-    /* Never substitute demo courses, departments, churches, assignments, or
-       users for live records. This prevents fabricated operational data. */
-    const operational = ["courses", "departments", "churches", "enrollments", "users", "teacherAssignments"];
-    if(operational.indexOf(collectionName) !== -1) return [];
-    console.warn("[firestoreRead] Using legacy demo fallback for non-operational collection:", collectionName);
-    return DEMO[collectionName] || [];
+    const err = new Error("Firebase Firestore is not ready.");
+    err.code = "app/firestore-not-ready";
+    window.__firestoreReadStatus[collectionName] = {state:"error", code:err.code, message:err.message, at:Date.now()};
+    console.error("[firestoreRead]", err.message, "Collection:", collectionName);
+    if(typeof window.toast === "function") window.toast("Database not ready", "Please wait a moment and try again.", "error");
+    return [];
   }
 
+  window.__firestoreReadStatus[collectionName] = {state:"loading", at:Date.now()};
   try{
+    let snap;
+    if(directUserDoc){
+      const docSnap = await FB.db.collection("users").doc(sessionUser.uid).get();
+      const list = docSnap.exists ? [Object.assign({id:docSnap.id}, docSnap.data())] : [];
+      window.__firestoreCache[cacheKey] = list;
+      window.__firestoreReadStatus[collectionName] = {state:list.length ? "success" : "empty", count:list.length, at:Date.now()};
+      return list;
+    }
+
     let query = FB.db.collection(collectionName);
+    if(options.where && Array.isArray(options.where)) query = query.where(options.where[0], options.where[1], options.where[2]);
+    if(options.orderBy) query = query.orderBy(options.orderBy[0], options.orderBy[1] || "asc");
+    if(options.limit) query = query.limit(options.limit);
 
-    /* Simple where support: options.where = ["field","==","value"] */
-    if(options.where && Array.isArray(options.where)){
-      query = query.where(options.where[0], options.where[1], options.where[2]);
-    }
-
-    /* Optional ordering */
-    if(options.orderBy){
-      query = query.orderBy(options.orderBy[0], options.orderBy[1] || "asc");
-    }
-
-    /* Optional limit */
-    if(options.limit){
-      query = query.limit(options.limit);
-    }
-
-    const snap = await query.get();
-
-    /* If Firestore returns empty, fall back to DEMO data */
-    if(snap.empty && !options.allowEmpty){
-      window.__firestoreCache[cacheKey] = [];
-      window.__firestoreReadStatus[cacheKey] = {
-        state: "empty", collection: collectionName, count: 0,
-        updatedAt: new Date().toISOString()
-      };
-      if(collectionName === "applications") window.__firestoreCache["applications:all"] = [];
-      return [];
-    }
-
-    const list = snap.docs.map(function(d){
-      return Object.assign({ id: d.id }, d.data());
-    });
-
+    snap = await query.get();
+    const list = snap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
     window.__firestoreCache[cacheKey] = list;
-    window.__firestoreReadStatus[cacheKey] = {
-      state: list.length ? "loaded" : "empty", collection: collectionName,
-      count: list.length, updatedAt: new Date().toISOString()
-    };
-    /* Legacy renderers read applications:all; it now contains only the
-       query permitted for the current role, never another church's queue. */
+    window.__firestoreReadStatus[collectionName] = {state:list.length ? "success" : "empty", count:list.length, at:Date.now()};
+    /* Legacy renderers read this key; the data remains role-scoped. */
     if(collectionName === "applications") window.__firestoreCache["applications:all"] = list;
     return list;
-
   }catch(err){
-  console.error("[firestoreRead] Failed for " + collectionName + ":", err);
-  window.__firestoreReadStatus[cacheKey] = {
-    state: "error", collection: collectionName,
-    code: err && err.code ? err.code : "unknown",
-    message: err && err.message ? err.message : "Unable to load records.",
-    updatedAt: new Date().toISOString()
-  };
-  /* Do not cache a permission/network failure as a valid empty result. */
-  delete window.__firestoreCache[cacheKey];
-  return [];
+    const code = err && err.code ? err.code : "unknown";
+    const message = err && err.message ? err.message : String(err);
+    window.__firestoreReadStatus[collectionName] = {state:"error", code:code, message:message, at:Date.now()};
+    delete window.__firestoreCache[cacheKey];
+    console.error("[firestoreRead] Failed for " + collectionName + " (" + code + "):", message);
+    if(typeof window.toast === "function"){
+      const userMessage = code === "permission-denied"
+        ? "Firestore denied this read. Check the signed-in role, query scope, and security rules."
+        : "Could not load database records. Check your connection and try again.";
+      window.toast("Database read failed", userMessage, "error");
+    }
+    return [];
+  }
 }
-}
+window.getFirestoreReadStatus = function(collectionName){
+  window.__firestoreReadStatus = window.__firestoreReadStatus || {};
+  return collectionName ? (window.__firestoreReadStatus[collectionName] || {state:"not-read"}) : Object.assign({}, window.__firestoreReadStatus);
+};
 
 /* Clear the cache (call after writes) */
 function firestoreClearCache(collectionName){
