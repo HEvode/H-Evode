@@ -7519,12 +7519,34 @@ async function loadStudentDashboard(){
       "student"
     );
   }catch(err){
-    console.error("[portal-student]", err);
-    host.innerHTML = '<div class="empty" style="padding:60px 24px">'
-      + '<h3>Could not load dashboard</h3>'
-      + '<p class="muted">' + esc(err.message) + '</p>'
-      + '<button class="btn btn-primary mt-3" onclick="go(\'portal-student\')">Retry</button>'
-      + '</div>';
+    console.error("[portal-student] Dashboard data load failed:", err);
+    /* Keep the dashboard interface visible even if one Firestore request fails.
+       Do not confuse a course-content permission error with a failed login. */
+    const message = (err && err.message) ? err.message : "An unexpected data-loading error occurred.";
+    const errorCode = (err && err.code) ? String(err.code) : "unknown";
+    const safeMessage = esc(message);
+    const safeCode = esc(errorCode);
+    host.innerHTML = dashShell(
+      "Student Dashboard",
+      [],
+      "Dashboard",
+      '<div class="alert alert-warning" role="status" style="margin:0 0 18px;padding:14px 16px;border-radius:12px">'
+        + '<strong>Your dashboard opened, but some information could not be loaded.</strong>'
+        + '<p style="margin:8px 0 0">' + safeMessage + '</p>'
+        + '<p class="muted" style="margin:6px 0 0;font-size:.82rem">Diagnostic code: ' + safeCode + '</p>'
+        + '<p style="margin:8px 0 0">If the course is still a draft, lessons and assignments remain restricted until an administrator publishes it.</p>'
+        + '<button class="btn btn-primary mt-3" onclick="go(\'portal-student\')">Retry loading</button>'
+      + '</div>'
+      + '<div class="role-kpi">'
+        + '<div>' + kpiCard("fa-book-open", "—", "Enrolled Courses", "Data not fully loaded", "student") + '</div>'
+        + '<div>' + kpiCard("fa-pen-to-square", "—", "Pending Assignments", "Data not fully loaded", "student") + '</div>'
+        + '<div>' + kpiCard("fa-clipboard-check", "—", "Submitted", "Data not fully loaded", "student") + '</div>'
+        + '<div>' + kpiCard("fa-award", "—", "Certificates", "Complete courses to earn", "student") + '</div>'
+      + '</div>'
+      + '<div class="role-panel"><div class="role-panel-head"><h3>Course information</h3></div>'
+        + '<p class="muted">Your account page is available. Some course data needs to load successfully before progress, deadlines, and grades can be calculated.</p></div>',
+      "student"
+    );
   }
 }
 
