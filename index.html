@@ -7206,22 +7206,7 @@ async function loadStudentDashboard(){
         accessError:accessError};
     }));
     const courses = courseData.filter(function(c){ return c !== null; });
-    const courseAccessWarnings = courses.filter(function(c){ return !!c.accessError; });
-
-    /* Load assignments independently. A permission error for one course must
-       not prevent the rest of the Student Dashboard from rendering. */
-    const assignmentCache = Object.create(null);
-    const assignmentAccessWarnings = [];
-    await Promise.all(courses.map(async function(item){
-      const cid = item.course.id;
-      try{
-        assignmentCache[cid] = await listCourseAssignments(cid);
-      }catch(assignmentErr){
-        assignmentCache[cid] = [];
-        assignmentAccessWarnings.push(item.course.title || cid);
-        console.warn("[portal-student] assignment access failed for", cid, assignmentErr);
-      }
-    }));
+    const courseAccessWarnings = courses.filter(function(c){ return !!(c.accessError || c.assignmentAccessError); });
 
     /* 3. Assignments + deadlines (parallel) */
     let pendingAssignments   = 0;
@@ -7231,7 +7216,15 @@ async function loadStudentDashboard(){
 
     await Promise.all(courses.map(async function(item){
       const cid = item.course.id;
-      const assignments = assignmentCache[cid] || [];
+      let assignments = [];
+      try{
+        assignments = await listCourseAssignments(cid);
+      }catch(assignErr){
+        item.assignmentAccessError = assignErr && assignErr.message
+          ? assignErr.message : "Assignments are not currently available for this course.";
+        console.warn("[portal-student] assignment list access failed for", cid, assignErr);
+        return; // A course's assignments must not prevent the whole dashboard from rendering.
+      }
 
       await Promise.all(assignments.map(async function(a){
         try{
@@ -7272,7 +7265,15 @@ async function loadStudentDashboard(){
     const recentGrades = [];
     await Promise.all(courses.map(async function(item){
       const cid = item.course.id;
-      const assignments = assignmentCache[cid] || [];
+      let assignments = [];
+      try{
+        assignments = await listCourseAssignments(cid);
+      }catch(assignErr){
+        item.assignmentAccessError = item.assignmentAccessError ||
+          (assignErr && assignErr.message ? assignErr.message : "Grades are not currently available for this course.");
+        console.warn("[portal-student] grade assignment list access failed for", cid, assignErr);
+        return; // Grades are optional dashboard data; keep other dashboard sections visible.
+      }
 
       await Promise.all(assignments.map(async function(a){
         try{
@@ -7289,8 +7290,8 @@ async function loadStudentDashboard(){
               recentGrades.push({
                 assignmentTitle: a.title,
                 courseTitle:     item.course.title,
-                score:           Number(sub.score != null ? sub.score : 0),
-                maxScore:        Number(a.maxScore != null ? a.maxScore : 100),
+                score:           sub.score || 0,
+                maxScore:        a.maxScore || 100,
                 gradedAt:        gradedAt
               });
             }
@@ -7348,20 +7349,12 @@ async function loadStudentDashboard(){
         + '</div>'
       + '</div>';
 
-    const warningItems = [];
-    if(courseAccessWarnings.length){
-      warningItems.push('<strong>Some course lessons are not available yet:</strong> '
-        + courseAccessWarnings.map(function(item){ return esc(item.course.title || item.course.id); }).join(', ')
-        + '. Ask your church administrator to verify that each course is published and assigned to your church.');
-    }
-    if(assignmentAccessWarnings.length){
-      warningItems.push('<strong>Some assignment information could not be loaded:</strong> '
-        + assignmentAccessWarnings.map(function(title){ return esc(title); }).join(', ')
-        + '. Your dashboard and other course information are still available.');
-    }
-    const courseAccessWarningHTML = warningItems.length
+    const courseAccessWarningHTML = courseAccessWarnings.length
       ? '<div class="alert alert-warning" role="status" style="margin:0 0 18px;padding:14px 16px;border-radius:12px">'
-        + warningItems.join('<br>') + '</div>'
+        + '<strong>Some course content is not currently accessible.</strong> '
+        + courseAccessWarnings.map(function(item){ return esc(item.course.title || item.course.id); }).join(', ')
+        + '. Your dashboard is available, but lessons, assignments, or grades for these courses may be hidden. '
+        + 'Ask your administrator to verify the course publication status and church assignment.</div>'
       : '';
 
     /* ── Continue Learning ── */
@@ -7519,34 +7512,12 @@ async function loadStudentDashboard(){
       "student"
     );
   }catch(err){
-    console.error("[portal-student] Dashboard data load failed:", err);
-    /* Keep the dashboard interface visible even if one Firestore request fails.
-       Do not confuse a course-content permission error with a failed login. */
-    const message = (err && err.message) ? err.message : "An unexpected data-loading error occurred.";
-    const errorCode = (err && err.code) ? String(err.code) : "unknown";
-    const safeMessage = esc(message);
-    const safeCode = esc(errorCode);
-    host.innerHTML = dashShell(
-      "Student Dashboard",
-      [],
-      "Dashboard",
-      '<div class="alert alert-warning" role="status" style="margin:0 0 18px;padding:14px 16px;border-radius:12px">'
-        + '<strong>Your dashboard opened, but some information could not be loaded.</strong>'
-        + '<p style="margin:8px 0 0">' + safeMessage + '</p>'
-        + '<p class="muted" style="margin:6px 0 0;font-size:.82rem">Diagnostic code: ' + safeCode + '</p>'
-        + '<p style="margin:8px 0 0">If the course is still a draft, lessons and assignments remain restricted until an administrator publishes it.</p>'
-        + '<button class="btn btn-primary mt-3" onclick="go(\'portal-student\')">Retry loading</button>'
-      + '</div>'
-      + '<div class="role-kpi">'
-        + '<div>' + kpiCard("fa-book-open", "—", "Enrolled Courses", "Data not fully loaded", "student") + '</div>'
-        + '<div>' + kpiCard("fa-pen-to-square", "—", "Pending Assignments", "Data not fully loaded", "student") + '</div>'
-        + '<div>' + kpiCard("fa-clipboard-check", "—", "Submitted", "Data not fully loaded", "student") + '</div>'
-        + '<div>' + kpiCard("fa-award", "—", "Certificates", "Complete courses to earn", "student") + '</div>'
-      + '</div>'
-      + '<div class="role-panel"><div class="role-panel-head"><h3>Course information</h3></div>'
-        + '<p class="muted">Your account page is available. Some course data needs to load successfully before progress, deadlines, and grades can be calculated.</p></div>',
-      "student"
-    );
+    console.error("[portal-student]", err);
+    host.innerHTML = '<div class="empty" style="padding:60px 24px">'
+      + '<h3>Could not load dashboard</h3>'
+      + '<p class="muted">' + esc(err.message) + '</p>'
+      + '<button class="btn btn-primary mt-3" onclick="go(\'portal-student\')">Retry</button>'
+      + '</div>';
   }
 }
 
@@ -17306,43 +17277,36 @@ console.log("✅ POST-G consolidated script loaded (v2)");
 
 /* ── Student enrollments ────────────────────────────────── */
 async function listMyEnrollments(){
-  const u = typeof window.currentUser === "function" ? window.currentUser() : null;
-  const authUser = (window.FB && FB.auth) ? FB.auth.currentUser : null;
-  const email = String((authUser && authUser.email) || (u && (u.email || u.user)) || "")
-    .trim().toLowerCase();
+  const u = currentUser();
+  if(!u || !u.user){
+    console.warn("[listMyEnrollments] No current user");
+    return [];
+  }
 
-  window.__lastStudentEnrollmentError = null;
-  if(!u || !u.uid || !email){
-    const err = new Error("Your student session is incomplete. Sign out, then sign in again.");
-    window.__lastStudentEnrollmentError = err;
-    throw err;
-  }
-  if(!window.FB || !FB.db){
-    const err = new Error("Firebase is not ready. Refresh the page and try again.");
-    window.__lastStudentEnrollmentError = err;
-    throw err;
-  }
+  const email = u.user.toLowerCase().trim();
 
   try{
-    /* The Firestore rules allow signed-in enrollment reads. Query with the
-       normalized account email used by enrollment records. */
     const snap = await FB.db.collection("enrollments")
-      .where("studentEmail", "==", email).get();
+      .where("studentEmail", "==", email)
+      .get();
 
     const list = snap.docs.map(function(d){
       return Object.assign({}, d.data(), { id: d.id });
     });
+
     const active = list.filter(function(e){
-      return !e.status || String(e.status).trim().toUpperCase() === "ACTIVE";
+      return !e.status || e.status === "ACTIVE";
     });
 
     console.log("[listMyEnrollments] email:", email,
-      "| total:", list.length, "| active:", active.length);
+      "| total:", list.length,
+      "| active:", active.length);
+
     return active;
   }catch(err){
     window.__lastStudentEnrollmentError = err;
-    console.error("[listMyEnrollments]", err && err.code, err && err.message);
-    throw err; // Don't misreport a Firestore failure as "not enrolled".
+    console.error("[listMyEnrollments]", err.code, err.message);
+    return [];
   }
 }
 window.listMyEnrollments = listMyEnrollments;
