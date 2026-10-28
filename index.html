@@ -7208,6 +7208,21 @@ async function loadStudentDashboard(){
     const courses = courseData.filter(function(c){ return c !== null; });
     const courseAccessWarnings = courses.filter(function(c){ return !!c.accessError; });
 
+    /* Load assignments independently. A permission error for one course must
+       not prevent the rest of the Student Dashboard from rendering. */
+    const assignmentCache = Object.create(null);
+    const assignmentAccessWarnings = [];
+    await Promise.all(courses.map(async function(item){
+      const cid = item.course.id;
+      try{
+        assignmentCache[cid] = await listCourseAssignments(cid);
+      }catch(assignmentErr){
+        assignmentCache[cid] = [];
+        assignmentAccessWarnings.push(item.course.title || cid);
+        console.warn("[portal-student] assignment access failed for", cid, assignmentErr);
+      }
+    }));
+
     /* 3. Assignments + deadlines (parallel) */
     let pendingAssignments   = 0;
     let submittedAssignments = 0;
@@ -7216,7 +7231,7 @@ async function loadStudentDashboard(){
 
     await Promise.all(courses.map(async function(item){
       const cid = item.course.id;
-      const assignments = await listCourseAssignments(cid);
+      const assignments = assignmentCache[cid] || [];
 
       await Promise.all(assignments.map(async function(a){
         try{
@@ -7257,7 +7272,7 @@ async function loadStudentDashboard(){
     const recentGrades = [];
     await Promise.all(courses.map(async function(item){
       const cid = item.course.id;
-      const assignments = await listCourseAssignments(cid);
+      const assignments = assignmentCache[cid] || [];
 
       await Promise.all(assignments.map(async function(a){
         try{
@@ -7333,12 +7348,20 @@ async function loadStudentDashboard(){
         + '</div>'
       + '</div>';
 
-    const courseAccessWarningHTML = courseAccessWarnings.length
-      ? '<div class="alert alert-warning" role="status" style="margin:0 0 18px;padding:14px 16px;border-radius:12px">'
-        + '<strong>Some course content needs administrator review.</strong> '
+    const warningItems = [];
+    if(courseAccessWarnings.length){
+      warningItems.push('<strong>Some course lessons are not available yet:</strong> '
         + courseAccessWarnings.map(function(item){ return esc(item.course.title || item.course.id); }).join(', ')
-        + '. Ask your church administrator to verify that each course is published and assigned to your church. '
-        + 'The dashboard remains available while this is checked.</div>'
+        + '. Ask your church administrator to verify that each course is published and assigned to your church.');
+    }
+    if(assignmentAccessWarnings.length){
+      warningItems.push('<strong>Some assignment information could not be loaded:</strong> '
+        + assignmentAccessWarnings.map(function(title){ return esc(title); }).join(', ')
+        + '. Your dashboard and other course information are still available.');
+    }
+    const courseAccessWarningHTML = warningItems.length
+      ? '<div class="alert alert-warning" role="status" style="margin:0 0 18px;padding:14px 16px;border-radius:12px">'
+        + warningItems.join('<br>') + '</div>'
       : '';
 
     /* ── Continue Learning ── */
