@@ -7168,35 +7168,45 @@ async function loadStudentDashboard(){
   try{
     /* 1. Enrollments */
     window.__lastStudentEnrollmentError = null;
-    const myEnrollments = await listMyEnrollments();
+    const enrollmentLoader = window.listMyEnrollments;
+    if(typeof enrollmentLoader !== "function"){
+      throw new Error("Student enrollment service did not initialize. Refresh the page; if this persists, redeploy the latest index.html.");
+    }
+    const myEnrollments = await enrollmentLoader();
     if(window.__lastStudentEnrollmentError){
       throw window.__lastStudentEnrollmentError;
     }
 
-    /* 2. Load each course + its lesson counts (parallel) */
+    /* Load each course independently so one denied course cannot crash the dashboard. */
     const courseData = await Promise.all(myEnrollments.map(async function(enr){
-      const course = await getCourseById(enr.courseId);
+      const courseId = enr.courseId || enr.courseID || enr.course_id;
+      if(!courseId) return null;
+      const course = await getCourseById(courseId);
       if(!course) return null;
-
-      const sections = await listSections(enr.courseId);
-      const lessonCounts = await Promise.all(sections.map(function(s){
-        return listLessons(enr.courseId, s.id).then(function(l){ return l.length; });
+      let sections = [];
+      let accessError = "";
+      try{ sections = await listSections(courseId); }
+      catch(sectionErr){
+        accessError = sectionErr && sectionErr.message ? sectionErr.message : "Course content access was denied.";
+        console.warn("[portal-student] section access failed for", courseId, sectionErr);
+      }
+      const lessonCounts = await Promise.all(sections.map(async function(section){
+        try{ return (await listLessons(courseId, section.id)).length; }
+        catch(lessonErr){
+          if(!accessError) accessError = lessonErr && lessonErr.message ? lessonErr.message : "Some lessons could not be loaded.";
+          console.warn("[portal-student] lesson access failed for", courseId, section.id, lessonErr);
+          return 0;
+        }
       }));
       const totalLessons = lessonCounts.reduce(function(a, b){ return a + b; }, 0);
-
-      const progress = await getMyCourseProgress(enr.courseId);
+      const progress = await getMyCourseProgress(courseId);
       const completed = (progress.completedLessons || []).length;
-
-      return {
-        course:           course,
-        enrollment:       enr,
-        totalLessons:     totalLessons,
-        completedLessons: completed,
-        percentage:       totalLessons > 0 ? Math.round((completed / totalLessons) * 100) : 0
-      };
+      return {course:course,enrollment:enr,totalLessons:totalLessons,completedLessons:completed,
+        percentage:totalLessons > 0 ? Math.min(100,Math.round((completed/totalLessons)*100)) : 0,
+        accessError:accessError};
     }));
-
     const courses = courseData.filter(function(c){ return c !== null; });
+    const courseAccessWarnings = courses.filter(function(c){ return !!c.accessError; });
 
     /* 3. Assignments + deadlines (parallel) */
     let pendingAssignments   = 0;
@@ -7322,6 +7332,14 @@ async function loadStudentDashboard(){
               "Complete courses to earn", "student")
         + '</div>'
       + '</div>';
+
+    const courseAccessWarningHTML = courseAccessWarnings.length
+      ? '<div class="alert alert-warning" role="status" style="margin:0 0 18px;padding:14px 16px;border-radius:12px">'
+        + '<strong>Some course content needs administrator review.</strong> '
+        + courseAccessWarnings.map(function(item){ return esc(item.course.title || item.course.id); }).join(', ')
+        + '. Ask your church administrator to verify that each course is published and assigned to your church. '
+        + 'The dashboard remains available while this is checked.</div>'
+      : '';
 
     /* ── Continue Learning ── */
     const continueLearning = courses.length
@@ -7474,7 +7492,7 @@ async function loadStudentDashboard(){
       "Student Dashboard",
       [],
       "Dashboard",
-      hero + kpis + continueLearning + deadlinesPanel + gradesPanel + quickActions,
+      hero + courseAccessWarningHTML + kpis + continueLearning + deadlinesPanel + gradesPanel + quickActions,
       "student"
     );
   }catch(err){
@@ -62920,7 +62938,7 @@ console.log("✅ Multi-language helpers loaded");
         +(admin.role==="churchAdmin"?'<input type="hidden" name="churchId" value="'+sdaEsc(churchId)+'">':'')+'</div>'
         +'<div class="form-group"><label>Primary Department</label><select name="departmentId"><option value="">No primary department</option>'+deptOptions+'</select></div>'
         +'</div>'
-        +(adminCanChangeRole?'<div class="reg-grid-2"><div class="form-group"><label>Role</label><select name="role"><option value="teacher" selected>Teacher</option><option value="student">Student</option><option value="churchAdmin">Church Admin</option><option value="superAdmin">Super Admin</option></select></div><div class="form-group"><label>Account Status</label><select name="status"><option value="ACTIVE"'+(userDoc.status!=="DISABLED"?' selected':'')+'>Active</option><option value="DISABLED"'+(userDoc.status==="DISABLED"?' selected':'')+'>Disabled</option><option value="PENDING_APPROVAL"'+(userDoc.status==="PENDING_APPROVAL"?' selected':'')+'>Pending approval</option></select></div></div>':'<p class="muted" style="font-size:.8rem">Your role cannot change teacher roles or account status. Only the Super Admin can do that.</p>')
+        +(adminCanChangeRole?'<div class="reg-grid-2"><div class="form-group"><label>Role</label><select name="role"><option value="teacher"'+(userDoc.role==="teacher"?' selected':'')+'>Teacher</option><option value="student"'+(userDoc.role==="student"?' selected':'')+'>Student</option><option value="churchAdmin"'+(userDoc.role==="churchAdmin"?' selected':'')+'>Church Admin</option><option value="superAdmin"'+(userDoc.role==="superAdmin"?' selected':'')+'>Super Admin</option></select></div><div class="form-group"><label>Account Status</label><select name="status"><option value="ACTIVE"'+(userDoc.status!=="DISABLED"?' selected':'')+'>Active</option><option value="DISABLED"'+(userDoc.status==="DISABLED"?' selected':'')+'>Disabled</option><option value="PENDING_APPROVAL"'+(userDoc.status==="PENDING_APPROVAL"?' selected':'')+'>Pending approval</option></select></div></div>':'<p class="muted" style="font-size:.8rem">Your role cannot change teacher roles or account status. Only the Super Admin can do that.</p>')
         +'<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:22px"><button type="button" class="btn btn-outline" onclick="closeEditUserModal()">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk"></i> Save Profile</button></div>'
         +'</form></div></div></div>';
       sdaClose(); document.body.insertAdjacentHTML("beforeend",html);
@@ -62932,6 +62950,26 @@ console.log("✅ Multi-language helpers loaded");
         form.dataset.originalRole=userDoc.role || "teacher";
         form.dataset.canChangeRole=adminCanChangeRole ? "1" : "0";
         form.dataset.adminRole=admin.role;
+        const churchSelect=form.elements.churchId;
+        const deptSelect=form.elements.departmentId;
+        const refreshDepartments=function(preferredId){
+          if(!deptSelect) return;
+          const selectedChurch=(churchSelect && churchSelect.value) || churchId || "";
+          const eligible=departments.filter(function(d){
+            const directChurch=String(d.churchId || d.churchID || "");
+            const churchList=Array.isArray(d.churchIds) ? d.churchIds.map(String) : [];
+            return !directChurch || directChurch===selectedChurch || churchList.indexOf(selectedChurch)!==-1;
+          });
+          const wanted=preferredId || deptSelect.value || "";
+          deptSelect.innerHTML='<option value="">No primary department</option>'+eligible.map(function(d){
+            return '<option value="'+sdaEsc(d.id)+'">'+sdaEsc(d.name || d.title || d.id)+'</option>';
+          }).join("");
+          if(wanted && eligible.some(function(d){return String(d.id)===String(wanted);})) deptSelect.value=wanted;
+          else deptSelect.value="";
+          if(!eligible.length) deptSelect.innerHTML='<option value="">No departments available for this church</option>';
+        };
+        refreshDepartments(userDoc.departmentId || "");
+        if(churchSelect && admin.role==="superAdmin") churchSelect.addEventListener("change",function(){refreshDepartments("");});
       }
     }catch(err){ console.error("[openEditUserModal]",err); sdaToast("Could not open profile",err.message,"error"); }
   };
@@ -62957,6 +62995,15 @@ console.log("✅ Multi-language helpers loaded");
       if(!snap.exists) throw new Error("The teacher profile document no longer exists. Refresh Teacher Management.");
       const old=snap.data() || {};
       if(admin.role==="churchAdmin" && old.churchId && old.churchId!==admin.churchId) throw new Error("You can edit only teachers in your own church.");
+      if(admin.role==="churchAdmin" && old.role!=="teacher") throw new Error("Church Admins can edit teacher profiles only.");
+      if(departmentId){
+        const deptSnap=await FB.db.collection("departments").doc(departmentId).get();
+        if(!deptSnap.exists) throw new Error("The selected department no longer exists. Refresh the form and choose a valid department.");
+        const dept=deptSnap.data() || {};
+        const deptChurch=String(dept.churchId || dept.churchID || "");
+        const deptChurches=Array.isArray(dept.churchIds) ? dept.churchIds.map(String) : [];
+        if(deptChurch && deptChurch!==churchId && deptChurches.indexOf(churchId)===-1) throw new Error("The selected department does not belong to the selected church. Choose a department from that church.");
+      }
       const payload={name:name,phone:phone,gender:gender,churchId:churchId,departmentId:departmentId,updatedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedBy:admin.user};
       if(admin.role==="superAdmin"){
         const role=(form.elements.role && form.elements.role.value) || old.role;
@@ -63121,6 +63168,22 @@ console.log("✅ Multi-language helpers loaded");
 })();
 </script>
 
+<script>
+/* Stable global fallback for the student enrollment loader. */
+(function(){
+  if(typeof window.listMyEnrollments === "function") return;
+  window.listMyEnrollments = async function(){
+    const u=typeof window.currentUser === "function" ? window.currentUser() : null;
+    if(!u || !u.user || !window.FB || !FB.db) throw new Error("Student session or Firebase database is not ready. Please sign in again.");
+    const email=String(u.user).trim().toLowerCase();
+    try{
+      const snap=await FB.db.collection("enrollments").where("studentEmail","==",email).get();
+      return snap.docs.map(function(d){return Object.assign({},d.data(),{id:d.id});})
+        .filter(function(e){return !e.status || String(e.status).toUpperCase()==="ACTIVE";});
+    }catch(err){window.__lastStudentEnrollmentError=err;console.error("[listMyEnrollments fallback]",err && err.code,err && err.message);throw err;}
+  };
+})();
+</script>
 </body>
 </html>
 
