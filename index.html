@@ -6768,30 +6768,18 @@ console.log("✅ Section E loaded");
 
 function currentUser(){
   const fbUser = (window.FB && FB.auth && FB.auth.currentUser) || null;
-  if(!fbUser){
-    /* No Firebase user — check for stale session and clear it */
-    try{ sessionStorage.removeItem("sda_session"); }catch(e){}
-    return null;
-  }
-
+  if(!fbUser){ try{ sessionStorage.removeItem("sda_session"); }catch(e){} return null; }
   let cached = {};
-  try{
-    cached = JSON.parse(sessionStorage.getItem("sda_session") || "{}");
-  }catch(e){ cached = {}; }
-
-  /* If cache is missing or for a different uid, return what we have */
-  if(cached.uid && cached.uid !== fbUser.uid){
-    cached = {};
-  }
-
+  try{ cached = JSON.parse(sessionStorage.getItem("sda_session") || "{}"); }catch(e){ cached = {}; }
+  if(cached.uid && cached.uid !== fbUser.uid) cached = {};
+  const authEmail = typeof fbUser.email === "string" ? fbUser.email.trim().toLowerCase() : "";
+  const cachedEmail = typeof cached.user === "string" ? cached.user.trim().toLowerCase() : "";
+  const safeEmail = authEmail || cachedEmail;
   return {
-    uid:       fbUser.uid,
-    user:      (fbUser.email || cached.user || "").toLowerCase(),
-    name:      fbUser.displayName || cached.name || (fbUser.email || "").split("@")[0],
-    role:      cached.role || null,       /* null until listener loads it */
-    churchId:  cached.churchId || null,
-    status:    cached.status || null,
-    photoURL:  fbUser.photoURL || cached.photoURL || null
+    uid: fbUser.uid, user: safeEmail,
+    name: fbUser.displayName || cached.name || (safeEmail ? safeEmail.split("@")[0] : "User"),
+    role: cached.role || null, churchId: cached.churchId || null,
+    status: cached.status || null, photoURL: fbUser.photoURL || cached.photoURL || null
   };
 }
 window.currentUser = currentUser;
@@ -7163,7 +7151,17 @@ async function loadStudentDashboard(){
   if(!host) return;
 
   const u = currentUser();
-  if(!u) return;
+  if(!u){
+    console.warn("[portal-student] Firebase Auth session is not ready.");
+    host.innerHTML = '<div class="empty"><h3>Sign-in required</h3><p class="muted">Your secure session is not ready. Please sign in again.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
+    return;
+  }
+  const studentEmail = String(u.user || "").trim().toLowerCase();
+  if(!studentEmail || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(studentEmail)){
+    console.error("[portal-student] No valid email available; refusing empty-email enrollment query.", {uid:u.uid,emailPresent:!!studentEmail});
+    host.innerHTML = '<div class="empty"><h3>Account email not ready</h3><p class="muted">We could not verify your signed-in email. Please sign out and sign in again. No enrollment query was sent.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
+    return;
+  }
 
   try{
     /* 1. Enrollments */
@@ -17277,36 +17275,26 @@ console.log("✅ POST-G consolidated script loaded (v2)");
 
 /* ── Student enrollments ────────────────────────────────── */
 async function listMyEnrollments(){
+  const fbUser = (window.FB && FB.auth && FB.auth.currentUser) || null;
   const u = currentUser();
-  if(!u || !u.user){
-    console.warn("[listMyEnrollments] No current user");
-    return [];
+  const email = String((fbUser && fbUser.email) || (u && u.user) || "").trim().toLowerCase();
+  if(!fbUser || !u || !email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)){
+    const err = new Error("A valid signed-in email is required to load student enrollments. Please sign in again.");
+    err.code = "auth/invalid-email";
+    window.__lastStudentEnrollmentError = err;
+    console.error("[listMyEnrollments] Blocked enrollment query: no valid authenticated email.");
+    throw err;
   }
-
-  const email = u.user.toLowerCase().trim();
-
   try{
-    const snap = await FB.db.collection("enrollments")
-      .where("studentEmail", "==", email)
-      .get();
-
-    const list = snap.docs.map(function(d){
-      return Object.assign({}, d.data(), { id: d.id });
-    });
-
-    const active = list.filter(function(e){
-      return !e.status || e.status === "ACTIVE";
-    });
-
-    console.log("[listMyEnrollments] email:", email,
-      "| total:", list.length,
-      "| active:", active.length);
-
+    const snap = await FB.db.collection("enrollments").where("studentEmail", "==", email).get();
+    const list = snap.docs.map(function(d){ return Object.assign({}, d.data(), { id:d.id }); });
+    const active = list.filter(function(e){ return !e.status || String(e.status).toUpperCase() === "ACTIVE"; });
+    console.log("[listMyEnrollments] email:", email, "| total:", list.length, "| active:", active.length);
     return active;
   }catch(err){
     window.__lastStudentEnrollmentError = err;
     console.error("[listMyEnrollments]", err.code, err.message);
-    return [];
+    throw err;
   }
 }
 window.listMyEnrollments = listMyEnrollments;
