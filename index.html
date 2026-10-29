@@ -49,12 +49,6 @@ firebase.initializeApp(firebaseConfig);
    · Caches in window.__firestoreCache[collectionName]
    ═══════════════════════════════════════════════════════════ */
 window.__firestoreCache = {};
-/* Read status is separate from returned data so an empty collection is not
-   confused with a denied/offline request. Views can use this for honest UI. */
-window.__firestoreReadStatus = window.__firestoreReadStatus || {};
-window.firestoreCollectionStatus = function(name){
-  return window.__firestoreReadStatus[name + ":all"] || null;
-};
 
 async function firestoreRead(collectionName, options){
   options = Object.assign({}, options || {});
@@ -80,17 +74,7 @@ async function firestoreRead(collectionName, options){
   }
 
   if(!window.FB || !FB.db){
-    const error = new Error("Firebase is not ready; live " + collectionName + " records could not be loaded.");
-    window.__firestoreReadStatus[cacheKey] = {
-      state: "error", collection: collectionName, message: error.message,
-      updatedAt: new Date().toISOString()
-    };
-    console.error("[firestoreRead]", error.message);
-    /* Never substitute demo courses, departments, churches, assignments, or
-       users for live records. This prevents fabricated operational data. */
-    const operational = ["courses", "departments", "churches", "enrollments", "users", "teacherAssignments"];
-    if(operational.indexOf(collectionName) !== -1) return [];
-    console.warn("[firestoreRead] Using legacy demo fallback for non-operational collection:", collectionName);
+    console.warn("[firestoreRead] FB not ready, using DEMO fallback for", collectionName);
     return DEMO[collectionName] || [];
   }
 
@@ -117,10 +101,6 @@ async function firestoreRead(collectionName, options){
     /* If Firestore returns empty, fall back to DEMO data */
     if(snap.empty && !options.allowEmpty){
       window.__firestoreCache[cacheKey] = [];
-      window.__firestoreReadStatus[cacheKey] = {
-        state: "empty", collection: collectionName, count: 0,
-        updatedAt: new Date().toISOString()
-      };
       if(collectionName === "applications") window.__firestoreCache["applications:all"] = [];
       return [];
     }
@@ -130,25 +110,14 @@ async function firestoreRead(collectionName, options){
     });
 
     window.__firestoreCache[cacheKey] = list;
-    window.__firestoreReadStatus[cacheKey] = {
-      state: list.length ? "loaded" : "empty", collection: collectionName,
-      count: list.length, updatedAt: new Date().toISOString()
-    };
     /* Legacy renderers read applications:all; it now contains only the
        query permitted for the current role, never another church's queue. */
     if(collectionName === "applications") window.__firestoreCache["applications:all"] = list;
     return list;
 
   }catch(err){
-  console.error("[firestoreRead] Failed for " + collectionName + ":", err);
-  window.__firestoreReadStatus[cacheKey] = {
-    state: "error", collection: collectionName,
-    code: err && err.code ? err.code : "unknown",
-    message: err && err.message ? err.message : "Unable to load records.",
-    updatedAt: new Date().toISOString()
-  };
-  /* Do not cache a permission/network failure as a valid empty result. */
-  delete window.__firestoreCache[cacheKey];
+  console.error("[firestoreRead] Failed for " + collectionName + ":", err.message);
+  window.__firestoreCache[cacheKey] = [];
   return [];
 }
 }
@@ -3579,193 +3548,6 @@ table.data td code {
 
 </style>
 
-
-<!-- SDA LEARNING PLATFORM — RESPONSIVE VISUAL POLISH (2026-10) -->
-<style id="sda-responsive-visual-polish">
-/* Responsive foundation: preserve the existing brand and improve fit on all devices. */
-*, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: 88px; }
-body { width: 100%; min-width: 0; overflow-x: hidden; }
-img, video, iframe, canvas, svg { max-width: 100%; }
-img, video { height: auto; }
-button, input, select, textarea { max-width: 100%; }
-button, .btn, a, input, select, textarea { touch-action: manipulation; }
-.container, .section, main, #app, .page, .content, .dashboard-content { min-width: 0; }
-.container { width: 100%; }
-.grid > *, .hero-inner > *, .dash-grid > *, .header-inner > *, .flex > * { min-width: 0; }
-.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.card, .stat-card, .quick-card, .dash-side, .mobile-panel { overflow-wrap: anywhere; }
-.page-header { overflow: hidden; }
-.page-header .container, .hero-inner { width: 100%; }
-.page-header p, .section-sub { overflow-wrap: anywhere; }
-.btn, button { min-height: 42px; }
-.form-group input, .form-group select, .form-group textarea,
-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
-select, textarea { min-width: 0; }
-:focus-visible { outline-offset: 3px; }
-
-/* Keep data tables readable without forcing the whole page wider. */
-table { max-width: 100%; }
-table.data { display: block; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-table.data th, table.data td { white-space: normal; overflow-wrap: anywhere; }
-pre, code { overflow-wrap: anywhere; }
-
-/* Tablet and small laptop */
-@media (max-width: 1080px) {
-  .header-inner { gap: 10px; padding: 10px 16px; }
-  .brand { gap: 9px; min-width: 0; }
-  .brand .logo { flex: 0 0 40px; width: 40px; height: 40px; }
-  .header-tools { flex-shrink: 0; }
-  .mobile-panel { width: min(360px, 92vw); padding: clamp(18px, 4vw, 28px); }
-  .hero { padding: 72px 0 60px; }
-  .hero-inner { gap: 28px; }
-  .dash-grid { grid-template-columns: minmax(0, 1fr); }
-  .dash-side { width: 100%; }
-}
-
-@media (max-width: 900px) {
-  .container { padding-left: 20px; padding-right: 20px; }
-  .section { padding-top: 56px; padding-bottom: 56px; }
-  .grid-2, .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .hero-inner { grid-template-columns: minmax(0, 1fr); }
-  .hero-media { max-width: 720px; width: 100%; margin-inline: auto; }
-  .page-header { padding: 44px 0 36px; }
-}
-
-/* Phones */
-@media (max-width: 640px) {
-  html { scroll-padding-top: 72px; }
-  .container { padding-left: 16px; padding-right: 16px; }
-  .header-inner { padding: 9px 12px; gap: 8px; }
-  .brand { font-size: .94rem; gap: 8px; }
-  .brand .logo { width: 36px; height: 36px; flex-basis: 36px; border-radius: 10px; font-size: 1rem; }
-  .brand small { font-size: .62rem; line-height: 1.25; }
-  .header-tools { gap: 3px; }
-  .icon-btn, .mobile-toggle { width: 42px; height: 42px; flex: 0 0 42px; }
-  .hero { padding: 52px 0 44px; }
-  .hero-inner { padding-left: 16px; padding-right: 16px; gap: 24px; }
-  .hero h1 { font-size: clamp(1.9rem, 8vw, 2.7rem); line-height: 1.08; letter-spacing: -.6px; }
-  .hero p { font-size: 1rem; line-height: 1.65; }
-  .hero-actions { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; }
-  .hero-actions .btn, .hero-actions button { width: 100%; justify-content: center; }
-  .section { padding-top: 42px; padding-bottom: 42px; }
-  .section-title { font-size: clamp(1.45rem, 6vw, 1.9rem); line-height: 1.2; }
-  .section-sub { margin-bottom: 24px; }
-  .grid, .grid-2, .grid-3, .grid-4 { grid-template-columns: minmax(0, 1fr) !important; gap: 16px; }
-  .card, .quick-card, .stat-card { padding: 18px !important; border-radius: 16px; }
-  .page-header { padding: 34px 0 28px; }
-  .page-header h1 { font-size: clamp(1.65rem, 7vw, 2.2rem); line-height: 1.15; }
-  .page-header p { font-size: .95rem; line-height: 1.55; }
-  .btn, button { min-height: 44px; }
-  .btn { padding: 11px 16px; white-space: normal; justify-content: center; }
-  .form-group { margin-bottom: 14px; }
-  .form-group input, .form-group select, .form-group textarea,
-  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea {
-    font-size: 16px !important; /* prevents automatic iOS zoom on focus */
-    max-width: 100%;
-  }
-  .form-group textarea, textarea { min-height: 110px; }
-  .dash-grid { gap: 16px; }
-  .dash-side { padding: 12px; }
-  .dash-side a { min-height: 42px; }
-  #toastWrap { top: 76px; left: 12px; right: 12px; }
-  .toast { min-width: 0; width: 100%; max-width: none; }
-  #recentPanel { width: min(210px, calc(100vw - 24px)); right: 12px; bottom: 12px; }
-  .modal, .modal-content, .dialog, .popup, .panel { max-width: calc(100vw - 24px); }
-  .table-wrap, .table-responsive { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .carousel-track { max-width: 100%; }
-}
-
-/* Very narrow phones (320–380px) */
-@media (max-width: 380px) {
-  .container { padding-left: 12px; padding-right: 12px; }
-  .header-inner { padding-left: 8px; padding-right: 8px; }
-  .brand { font-size: .84rem; }
-  .brand small { font-size: .58rem; }
-  .brand .logo { width: 32px; height: 32px; flex-basis: 32px; }
-  .icon-btn, .mobile-toggle { width: 38px; height: 38px; flex-basis: 38px; }
-  .hero-inner { padding-left: 12px; padding-right: 12px; }
-  .hero h1 { font-size: 1.85rem; }
-  .card, .quick-card, .stat-card { padding: 14px !important; }
-  .mobile-panel { width: 94vw; }
-}
-
-/* Landscape phones: use space efficiently without shrinking text too far. */
-@media (max-height: 500px) and (orientation: landscape) {
-  .hero { padding-top: 34px; padding-bottom: 32px; }
-  .page-header { padding-top: 28px; padding-bottom: 24px; }
-  .mobile-panel { overflow-y: auto; }
-}
-
-/* Accessibility: respect reduced-motion preference. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-}
-</style>
-<!-- END SDA RESPONSIVE VISUAL POLISH -->
-
-
-<style id="sda-mobile-render-repair">
-html{ -webkit-text-size-adjust:100%; text-size-adjust:100%; }
-*,*::before,*::after{box-sizing:border-box}
-img,video,canvas,svg{max-width:100%}
-body{overflow-wrap:anywhere}
-@media(max-width:640px){
- body{font-size:16px;line-height:1.5}
- h1{font-size:clamp(1.55rem,6vw,2.1rem);line-height:1.18}
- h2{font-size:clamp(1.3rem,5vw,1.7rem);line-height:1.22}
- h3{font-size:clamp(1.1rem,4.3vw,1.35rem);line-height:1.28}
- p,li,label,.muted,.section-subtitle{font-size:1rem;line-height:1.55;overflow-wrap:anywhere}
- button,.btn,a[role="button"]{min-height:42px;max-width:100%;white-space:normal;overflow-wrap:anywhere}
- input,select,textarea{font-size:16px!important;max-width:100%}
- .container,.section,.card,.reg-block{max-width:100%;min-width:0}
- .grid,[class*="grid-"]{min-width:0}
- header,.navbar,.nav-bar,.topbar{max-width:100%}
-}
-@media(max-width:380px){body{font-size:15px}.container{padding-left:12px!important;padding-right:12px!important}}
-.broken-image-placeholder{display:flex;align-items:center;justify-content:center;min-height:48px;padding:12px;color:#dce6ff;background:rgba(5,10,42,.72);border-radius:18px;font-size:.9rem;text-align:center}
-</style>
-
-
-<style id="sda-footer-interactive-polish">
-/* SDA Learning Platform — orderly, accessible, interactive footer */
-#siteFooterEl{position:relative;isolation:isolate;overflow:hidden;padding:clamp(38px,5vw,64px) 0 22px;margin-top:clamp(36px,5vw,64px);background:linear-gradient(135deg,#07152f 0%,#0c2346 58%,#102e50 100%);color:#dce6f5;border-top:3px solid #d3a64b}
-#siteFooterEl:before{content:"";position:absolute;inset:0 0 auto;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);pointer-events:none}
-#siteFooterEl>.container{position:relative;z-index:1}
-#siteFooterEl .footer-grid{display:grid;grid-template-columns:minmax(240px,1.55fr) repeat(4,minmax(130px,1fr));gap:clamp(20px,3vw,38px);margin:0 0 34px;align-items:start}
-#siteFooterEl .footer-col{min-width:0}
-#siteFooterEl .footer-col:first-child{padding-right:clamp(0px,2vw,22px)}
-#siteFooterEl .footer-col h4{display:flex;align-items:center;gap:9px;color:#fff;font-size:.94rem;font-weight:800;letter-spacing:.045em;text-transform:uppercase;margin:0 0 17px;padding-bottom:11px;position:relative}
-#siteFooterEl .footer-col h4:after{content:"";position:absolute;left:0;bottom:0;width:34px;height:2px;border-radius:2px;background:#d3a64b}
-#siteFooterEl .footer-col p{color:#c5d2e5;line-height:1.75;margin:0 0 14px}
-#siteFooterEl .footer-col>a{display:flex;align-items:center;gap:8px;width:fit-content;max-width:100%;padding:6px 0;color:#c4d1e5;text-decoration:none;line-height:1.45;transition:color .18s ease,transform .18s ease}
-#siteFooterEl .footer-col>a:hover,#siteFooterEl .footer-col>a:focus-visible{color:#ffd77d;transform:translateX(4px);padding-left:0;text-decoration:none}
-#siteFooterEl .footer-col a:focus-visible,#siteFooterEl .social-row a:focus-visible{outline:3px solid #ffd77d;outline-offset:4px;border-radius:7px}
-#siteFooterEl .social-heading{font-size:.77rem;color:#e5c77f;font-weight:800;letter-spacing:.09em;text-transform:uppercase;margin:19px 0 10px}
-#siteFooterEl .social-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:0 0 17px}
-#siteFooterEl .social-row a{position:relative;display:inline-flex;flex:0 0 42px;width:42px;height:42px;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.17);border-radius:13px;background:rgba(255,255,255,.075);color:#fff;font-size:1.08rem;text-decoration:none;box-shadow:0 4px 12px rgba(0,0,0,.12);transition:transform .2s ease,background .2s ease,border-color .2s ease,box-shadow .2s ease}
-#siteFooterEl .social-row a:hover{transform:translateY(-4px);background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.55);box-shadow:0 9px 20px rgba(0,0,0,.23)}
-#siteFooterEl .social-row a[aria-label="WhatsApp"]:hover{background:#128c53;border-color:#25d366}
-#siteFooterEl .social-row a[aria-label="Facebook"]:hover{background:#1877f2;border-color:#6ba5ff}
-#siteFooterEl .social-row a[aria-label="Instagram"]:hover{background:linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045);border-color:#f5a1c6}
-#siteFooterEl .social-row a[aria-label="YouTube"]:hover{background:#e62117;border-color:#ff7770}
-#siteFooterEl .footer-contact{display:grid;gap:9px;margin-top:12px;font-size:.83rem;line-height:1.55}
-#siteFooterEl .footer-contact>div{display:grid;grid-template-columns:18px minmax(0,1fr);gap:9px;align-items:start;overflow-wrap:anywhere}
-#siteFooterEl .footer-contact i{margin-top:3px}
-#siteFooterEl .footer-contact a{display:inline;color:#dce6f5;text-decoration:none;overflow-wrap:anywhere}
-#siteFooterEl .footer-contact a:hover{color:#ffd77d;text-decoration:underline}
-#siteFooterEl .footer-bottom{display:flex;justify-content:space-between;align-items:center;gap:12px 24px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,.16);padding-top:19px;font-size:.8rem;line-height:1.6;color:#aebed4}
-#siteFooterEl .footer-bottom a{color:#f2d18a;text-decoration:none}
-#siteFooterEl .footer-bottom a:hover{text-decoration:underline;color:#fff}
-#siteFooterEl .seo-crawlable{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-@media(max-width:1050px){#siteFooterEl .footer-grid{grid-template-columns:repeat(3,minmax(0,1fr))}#siteFooterEl .footer-col:first-child{grid-column:span 3;max-width:560px}}
-@media(max-width:680px){#siteFooterEl{padding:36px 0 18px}#siteFooterEl .footer-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 20px;margin-bottom:28px}#siteFooterEl .footer-col:first-child{grid-column:1/-1;max-width:none;padding-right:0}#siteFooterEl .footer-col h4{font-size:.84rem;margin-bottom:13px}#siteFooterEl .footer-col>a{font-size:.84rem;padding:6px 0}#siteFooterEl .footer-bottom{align-items:flex-start;flex-direction:column;gap:7px}}
-@media(max-width:380px){#siteFooterEl .footer-grid{grid-template-columns:minmax(0,1fr);gap:22px}#siteFooterEl .footer-col:first-child{grid-column:auto}#siteFooterEl .social-row{gap:8px}#siteFooterEl .social-row a{flex-basis:40px;width:40px;height:40px}}
-@media(prefers-reduced-motion:reduce){#siteFooterEl *,#siteFooterEl *:before,#siteFooterEl *:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
-</style>
 </head>
 
 <body>
@@ -7189,44 +6971,16 @@ ROUTES["portal-student"] = function(){
   + '</section>';
 };
 
-async function getStudentDashboardSubmission(courseId, assignmentId, student){
-  if(!FB || !FB.db || !courseId || !assignmentId || !student || !student.uid) {
-    throw new Error("Student dashboard is missing required Firebase or assignment details.");
-  }
-  const ref = FB.db.collection("courses").doc(courseId)
-    .collection("assignments").doc(assignmentId).collection("submissions");
-
-  // Support both legacy submissions keyed by UID and submissions keyed by their own ID.
-  const direct = await ref.doc(student.uid).get();
-  if(direct.exists) return direct;
-
-  const byUid = await ref.where("studentUid", "==", student.uid).limit(1).get();
-  if(!byUid.empty) return byUid.docs[0];
-
-  const email = (student.user || "").toLowerCase().trim();
-  if(email){
-    const byEmail = await ref.where("studentEmail", "==", email).limit(1).get();
-    if(!byEmail.empty) return byEmail.docs[0];
-  }
-  return direct;
-}
-
 async function loadStudentDashboard(){
   const host = document.getElementById("studentDashHost");
   if(!host) return;
 
   const u = currentUser();
   if(!u) return;
-  if(!window.FB || !FB.db){
-    host.innerHTML = '<div class="empty" style="padding:60px 24px"><h3>Student data is temporarily unavailable</h3><p class="muted">The database connection is not ready. Please retry in a moment.</p><button class="btn btn-primary mt-3" onclick="go(\'portal-student\')">Retry</button></div>';
-    return;
-  }
 
   try{
     /* 1. Enrollments */
-    const myEnrollments = (await listMyEnrollments()).filter(function(enr){
-      return !!(enr && enr.courseId);
-    });
+    const myEnrollments = await listMyEnrollments();
 
     /* 2. Load each course + its lesson counts (parallel) */
     const courseData = await Promise.all(myEnrollments.map(async function(enr){
@@ -7265,7 +7019,9 @@ async function loadStudentDashboard(){
 
       await Promise.all(assignments.map(async function(a){
         try{
-          const subSnap = await getStudentDashboardSubmission(cid, a.id, u);
+          const subSnap = await FB.db.collection("courses").doc(cid)
+            .collection("assignments").doc(a.id)
+            .collection("submissions").doc(u.uid).get();
 
           if(!subSnap.exists){
             pendingAssignments++;
@@ -7289,9 +7045,7 @@ async function loadStudentDashboard(){
               submittedAssignments++;
             }
           }
-        }catch(e){
-          console.warn("[portal-student] Could not read assignment submission", cid, a.id, e);
-        }
+        }catch(e){}
       }));
     }));
 
@@ -7306,7 +7060,9 @@ async function loadStudentDashboard(){
 
       await Promise.all(assignments.map(async function(a){
         try{
-          const subSnap = await getStudentDashboardSubmission(cid, a.id, u);
+          const subSnap = await FB.db.collection("courses").doc(cid)
+            .collection("assignments").doc(a.id)
+            .collection("submissions").doc(u.uid).get();
 
           if(subSnap.exists){
             const sub = subSnap.data();
@@ -7323,9 +7079,7 @@ async function loadStudentDashboard(){
               });
             }
           }
-        }catch(e){
-          console.warn("[portal-student] Could not read grade submission", cid, a.id, e);
-        }
+        }catch(e){}
       }));
     }));
 
@@ -7524,9 +7278,6 @@ async function loadStudentDashboard(){
           + actionTile("fa-award",          "My Certificates",  "Download certificates", "student-certificates", "student")
         + '</div>'
       + '</div>';
-
-    const latestUser = currentUser();
-    if(!document.getElementById("studentDashHost") || !latestUser || latestUser.uid !== u.uid) return;
 
     host.innerHTML = dashShell(
       "Student Dashboard",
@@ -8365,9 +8116,6 @@ async function listSections(courseId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("sections").get();
 
-    /* Section documents contain section metadata, not lesson content.
-       Do not call hydrateLessonContent here: sectionId was undefined and
-       caused a ReferenceError, making every section appear to be missing. */
     const list = snap.docs.map(function(d){
       return Object.assign({}, d.data(), { id: d.id });
     });
@@ -8380,10 +8128,8 @@ async function listSections(courseId){
 
     return list;
   }catch(err){
-    console.error("[listSections] Failed to load sections:", err);
-    /* Re-throw so the reading page can show a loading/permission error
-       instead of falsely displaying an empty course. */
-    throw err;
+    console.error("[listSections]", err);
+    return [];
   }
 }
 window.listSections = listSections;
@@ -8445,9 +8191,9 @@ async function listLessons(courseId, sectionId){
       .collection("sections").doc(sectionId)
       .collection("lessons").get();
 
-    const list = await Promise.all(snap.docs.map(function(d){
-      return hydrateLessonContent(courseId, sectionId, Object.assign({}, d.data(), { id: d.id }));
-    }));
+    const list = snap.docs.map(function(d){
+      return Object.assign({}, d.data(), { id: d.id });
+    });
 
     list.sort(function(a, b){
       const oa = typeof a.order === "number" ? a.order : 9999;
@@ -8470,52 +8216,13 @@ async function getLesson(courseId, sectionId, lessonId){
       .collection("sections").doc(sectionId)
       .collection("lessons").doc(lessonId).get();
     if(!snap.exists) return null;
-    return await hydrateLessonContent(courseId, sectionId, Object.assign({}, snap.data(), { id: snap.id }));
+    return Object.assign({}, snap.data(), { id: snap.id });
   }catch(err){
     console.error("[getLesson]", err);
     return null;
   }
 }
 window.getLesson = getLesson;
-
-/* Store very long lesson HTML in small Firestore subdocuments. Firestore documents
-   have a 1 MiB limit; chunking avoids the 1,048,487-byte content field failure. */
-const LESSON_CONTENT_CHUNK_CHARS = 180000;
-function lessonDocRef(courseId, sectionId, lessonId){
-  let ref = FB.db.collection("courses").doc(courseId);
-  if(sectionId) ref = ref.collection("sections").doc(sectionId).collection("lessons").doc(lessonId);
-  else ref = ref.collection("lessons").doc(lessonId);
-  return ref;
-}
-async function hydrateLessonContent(courseId, sectionId, lesson){
-  if(!lesson || !lesson.contentChunked) return lesson;
-  const ref = lessonDocRef(courseId, sectionId || lesson.sectionId || null, lesson.id);
-  const snap = await ref.collection("contentChunks").orderBy("index").get();
-  const content = snap.docs.map(function(d){ return d.data().text || ""; }).join("");
-  return Object.assign({}, lesson, {content:content, contentChunked:false});
-}
-async function writeLessonContent(ref, content){
-  const old = await ref.collection("contentChunks").get();
-  const batchDelete = FB.db.batch();
-  old.docs.forEach(function(d){ batchDelete.delete(d.ref); });
-  if(old.docs.length) await batchDelete.commit();
-  if(content.length <= LESSON_CONTENT_CHUNK_CHARS){
-    return {content:content, contentChunked:false, contentLength:content.length};
-  }
-  const chunks = [];
-  for(let i=0;i<content.length;i+=LESSON_CONTENT_CHUNK_CHARS){
-    chunks.push({index:chunks.length, text:content.slice(i,i+LESSON_CONTENT_CHUNK_CHARS)});
-  }
-  for(let i=0;i<chunks.length;i+=400){
-    const batch = FB.db.batch();
-    chunks.slice(i,i+400).forEach(function(c){
-      batch.set(ref.collection("contentChunks").doc(String(c.index).padStart(5,"0")), c);
-    });
-    await batch.commit();
-  }
-  return {content:"", contentChunked:true, contentLength:content.length, contentChunkCount:chunks.length};
-}
-window.hydrateLessonContent = hydrateLessonContent;
 
 async function saveLesson(courseId, sectionId, data){
   if(!courseId || !sectionId) throw new Error("courseId and sectionId required");
@@ -8527,15 +8234,19 @@ async function saveLesson(courseId, sectionId, data){
   const now = new Date().toISOString();
   const isNew = !data.createdAt;
 
-  const ref = lessonDocRef(courseId, sectionId, data.id);
-  const contentFields = await writeLessonContent(ref, data.content || "");
-  const payload = Object.assign({}, data, contentFields, {
-    courseId: courseId, sectionId: sectionId,
+  const payload = Object.assign({}, data, {
+    courseId:  courseId,
+    sectionId: sectionId,
     createdAt: isNew ? now : data.createdAt,
-    updatedAt: now, updatedBy: u.user
+    updatedAt: now,
+    updatedBy: u.user
   });
   if(isNew) payload.createdBy = u.user;
-  await ref.set(payload, { merge: true });
+
+  await FB.db.collection("courses").doc(courseId)
+    .collection("sections").doc(sectionId)
+    .collection("lessons").doc(data.id)
+    .set(payload, { merge: true });
 
   firestoreClearCache("courses");
   return payload;
@@ -8559,9 +8270,9 @@ async function getCourseLevelLessons(courseId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("lessons").get();
 
-    const list = await Promise.all(snap.docs.map(function(d){
-      return hydrateLessonContent(courseId, null, Object.assign({}, d.data(), { id: d.id }));
-    }));
+    const list = snap.docs.map(function(d){
+      return Object.assign({}, d.data(), { id: d.id });
+    });
 
     list.sort(function(a, b){
       return (a.order || 0) - (b.order || 0);
@@ -8581,7 +8292,7 @@ async function getCourseLevelLesson(courseId, lessonId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("lessons").doc(lessonId).get();
     if(!snap.exists) return null;
-    return await hydrateLessonContent(courseId, null, Object.assign({}, snap.data(), { id: snap.id }));
+    return Object.assign({}, snap.data(), { id: snap.id });
   }catch(err){
     console.error("[getCourseLevelLesson]", err);
     return null;
@@ -8677,9 +8388,7 @@ ROUTES["admin-courses"] = function(){
       + '<h3>Access denied</h3></div></section>';
   }
 
-  /* Super Admin sees the platform-wide course inventory. Church Admin is always
-     scoped to their own assigned church, not a stale global church selector. */
-  const churchId = u.role === "superAdmin" ? "" : (u.churchId || getCurrentChurchId() || "");
+  const churchId = getCurrentChurchId();
 
   setTimeout(async function(){
     const host = document.getElementById("adminCoursesGrid");
@@ -14926,19 +14635,13 @@ window.submitAddUser = async function(){
 window.openEditUserModal = async function(uid){
   if(!requireSuperAdmin()) return;
 
-  let userDoc = (window.__allSuperUsers || []).find(function(x){
-    return String(x.id || x.docId || "") === String(uid) || String(x.uid || "") === String(uid);
+  const userDoc = (window.__allSuperUsers || []).find(function(x){
+    return (x.uid || x.id) === uid;
   });
   if(!userDoc){
-    try{
-      const direct=await FB.db.collection("users").doc(String(uid)).get();
-      if(direct.exists) userDoc=Object.assign({id:direct.id,docId:direct.id},direct.data());
-      if(!userDoc){const q=await FB.db.collection("users").where("uid","==",String(uid)).limit(1).get();if(!q.empty)userDoc=Object.assign({id:q.docs[0].id,docId:q.docs[0].id},q.docs[0].data());}
-      if(userDoc)window.__allSuperUsers=(window.__allSuperUsers||[]).filter(function(x){return String(x.id||x.docId||"")!==String(userDoc.id||userDoc.docId||"")&&String(x.uid||"")!==String(userDoc.uid||"");}).concat([userDoc]);
-    }catch(fetchErr){console.warn("[openEditUserModal] recovery",fetchErr);}
+    toast("Not found", "User does not exist.", "error");
+    return;
   }
-  if(!userDoc){toast("User not found","Could not find this user by document ID or UID. Refresh the user list and try again.","error");return;}
-  const editDocumentId=String(userDoc.id||userDoc.docId||uid);
 
   let churches = [];
   let departments = [];
@@ -14954,7 +14657,7 @@ window.openEditUserModal = async function(uid){
   }).join("");
 
   const filteredDepts = userDoc.churchId
-    ? departments.filter(function(d){ return !d.churchId || d.churchId === userDoc.churchId || (Array.isArray(d.churchIds) && d.churchIds.includes(userDoc.churchId)); })
+    ? departments.filter(function(d){ return d.churchId === userDoc.churchId; })
     : departments;
 
   const deptOptions = filteredDepts.map(function(d){
@@ -14982,7 +14685,7 @@ window.openEditUserModal = async function(uid){
           + '</div>'
           + '<form id="editUserForm" '
             + 'onsubmit="event.preventDefault();submitEditUser(\'' 
-            + esc(editDocumentId) + '\');" style="padding:24px">'
+            + esc(uid) + '\');" style="padding:24px">'
 
             + '<div class="reg-grid-2">'
               + '<div class="form-group"><label>Full Name *</label>'
@@ -15083,11 +14786,7 @@ window.submitEditUser = async function(uid){
   btn.innerHTML = '<span class="loader"></span> Saving…';
 
   try{
-    const userRef = FB.db.collection("users").doc(String(uid));
-    const existingUserSnap = await userRef.get();
-    if(!existingUserSnap.exists) throw new Error("The user document was not found. Refresh the user list and reopen Edit.");
-    await userRef.update({
-      uid:          existingUserSnap.data().uid || String(uid),
+    await FB.db.collection("users").doc(uid).update({
       name:         newName,
       email:        newEmail,
       role:         newRole,
@@ -16077,11 +15776,10 @@ window.openAddChurchModal = function(){
             + '<div class="reg-grid-2">'
               + '<div class="form-group"><label>Church Name *</label>'
                 + '<input name="name" required minlength="3"></div>'
-              + '<div class="form-group"><label>Church Code</label>'
-                + '<input name="initials" maxlength="6" '
-                  + 'placeholder="Generated automatically" '
-                  + 'style="text-transform:uppercase">'
-                + '<small class="muted">A full SDA-XXX-001 code is generated using the same system as church registration.</small></div>'
+              + '<div class="form-group"><label>Church Code *</label>'
+                + '<input name="initials" required maxlength="4" '
+                  + 'placeholder="e.g. KC" '
+                  + 'style="text-transform:uppercase"></div>'
             + '</div>'
 
             + '<div class="form-group"><label>Location</label>'
@@ -16117,26 +15815,38 @@ window.closeChurchModal = function(){
 };
 
 window.submitChurchForm = async function(){
-  const form=document.getElementById("churchForm"); if(!form)return;
-  if(!requireSuperAdmin())return;
-  const name=form.name.value.trim();
-  if(name.length<3){toast("Invalid church name","Enter at least 3 characters.","error");return;}
-  const btn=form.querySelector('button[type="submit"]'); const original=btn?btn.innerHTML:"Create Church";
-  if(btn){btn.disabled=true;btn.innerHTML='<span class="loader"></span> Creating…';}
+  const form = document.getElementById("churchForm");
+  if(!form) return;
+
+  const name     = form.name.value.trim();
+  const initials = form.initials.value.trim().toUpperCase();
+
+  if(!name || !initials){
+    toast("Missing", "Name and code are required.", "error");
+    return;
+  }
+
+  const churchId = "CH" + Date.now();
   try{
-    const generated=await generateChurchCode(name), code=generated.code, initials=generated.namePart;
-    const dup=await FB.db.collection("churches").where("code","==",code).limit(1).get();
-    if(!dup.empty)throw new Error("This church code already exists. Check the church code counter and retry.");
-    const churchId="CH"+Date.now();
     await FB.db.collection("churches").doc(churchId).set({
-      id:churchId, churchId:churchId, name:name, initials:initials, code:code,
-      location:form.location.value.trim(), adminEmail:form.adminEmail.value.trim().toLowerCase(),
-      phone:form.phone.value.trim(), status:"ACTIVE",
-      createdAt:firebase.firestore.FieldValue.serverTimestamp(),
-      createdBy:(currentUser()&&(currentUser().email||currentUser().user))||"superAdmin"
+      id:          churchId,
+      name:        name,
+      initials:    initials,
+      location:    form.location.value.trim(),
+      adminEmail:  form.adminEmail.value.trim().toLowerCase(),
+      phone:       form.phone.value.trim(),
+      status:      "ACTIVE",
+      createdAt:   firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy:   currentUser().user
     });
-    firestoreClearCache("churches");toast("Church created",name+" · "+code,"success");closeChurchModal();go("super-churches");
-  }catch(err){console.error("[submitChurchForm]",err);toast("Failed to create church",err.message||"Please try again.","error");if(btn){btn.disabled=false;btn.innerHTML=original;}}
+
+    firestoreClearCache("churches");
+    toast("Church created", name, "success");
+    closeChurchModal();
+    go("super-churches");
+  }catch(err){
+    toast("Failed", err.message, "error");
+  }
 };
 
 window.openEditChurchModal = function(id){
@@ -16872,9 +16582,7 @@ ROUTES["super-departments"] = function(){
                 + '<div class="e-card-actions">'
                   + '<button class="btn btn-primary btn-sm" '
                     + 'onclick="openEditDeptModal(\'' + d.id + '\')">'
-                    + ((d.churchId === "__global__" || d.isGlobal === true || !d.churchId)
-                      ? '<i class="fa-solid fa-church"></i> Assign to Church'
-                      : '<i class="fa-solid fa-pen"></i> Edit Assignment') + '</button>'
+                    + '<i class="fa-solid fa-pen"></i> Edit</button>'
                   + '<button class="btn btn-outline btn-sm" '
                     + 'style="color:#B23A3A;border-color:#B23A3A" '
                     + 'onclick="confirmDeleteDept(\'' + d.id + '\',\'' 
@@ -17168,10 +16876,7 @@ ROUTES["church-admin-departments"] = function(){
     try{
       const all = await firestoreRead("departments", { forceRefresh: true });
       const departments = all.filter(function(d){
-        /* Global departments are available in every church; local departments
-           remain isolated to their assigned church. */
-        return !churchId || !d.churchId || d.churchId === "__global__"
-          || d.isGlobal === true || d.churchId === churchId;
+        return !churchId || d.churchId === churchId;
       });
       window.__myDepartments = departments;
 
@@ -18171,29 +17876,6 @@ ROUTES["student-course"] = function(params){
   + '</section>';
 };
 
-async function getCourseExportText(courseId){
-  const snap = await FB.db.collection("courses").doc(courseId).get();
-  if(!snap.exists) throw new Error("Course not found");
-  const course = Object.assign({id:snap.id}, snap.data());
-  const lessons = await getAllCourseLessons(courseId);
-  let out = (course.title || "Course") + "\n" + "=".repeat(Math.min((course.title || "Course").length,80)) + "\n\n";
-  if(course.desc) out += course.desc + "\n\n";
-  lessons.forEach(function(l,i){
-    out += "LESSON " + (i+1) + ": " + (l.title || "Untitled") + "\n";
-    if(l.duration) out += "Duration: " + l.duration + " minutes\n";
-    out += (l.content || "").replace(/<br\s*\/?\s*>/gi,"\n").replace(/<\/(p|div|h[1-6]|li)>/gi,"\n").replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">") + "\n\n";
-  });
-  return {course:course, text:out};
-}
-window.copyCourseContent = async function(courseId){
-  try{ const x=await getCourseExportText(courseId); await navigator.clipboard.writeText(x.text); toast("Copied","Course and lesson text copied.","success"); }
-  catch(e){ try{const x=await getCourseExportText(courseId); window.prompt("Copy course content:",x.text);}catch(err){toast("Copy failed",err.message,"error");} }
-};
-window.downloadCourseContent = async function(courseId){
-  try{const x=await getCourseExportText(courseId); const blob=new Blob([x.text],{type:"text/plain;charset=utf-8"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=(x.course.title||"course").replace(/[^a-z0-9-_]+/gi,"-")+"-content.txt"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); toast("Downloaded","Course content saved as a text file.","success");}
-  catch(e){toast("Download failed",e.message,"error");}
-};
-
 function renderCoursePlayer(course, sectionData, progress, stats){
   const u = currentUser();
   const completedSet = new Set(progress.completedLessons || []);
@@ -18336,10 +18018,6 @@ function renderCoursePlayer(course, sectionData, progress, stats){
       + '</div>'
       + '<div style="margin-top:8px;font-size:.82rem;opacity:.92;font-weight:700">'
         + stats.pct + '% complete</div>'
-      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'
-        + '<button class="btn btn-light btn-sm" onclick="downloadCourseContent(\'' + course.id + '\')"><i class="fa-solid fa-download"></i> Download Course</button>'
-        + '<button class="btn btn-outline btn-sm" onclick="copyCourseContent(\'' + course.id + '\')"><i class="fa-solid fa-copy"></i> Copy Course</button>'
-      + '</div>'
     + '</div>'
     + continueCard
     + sectionsHTML
@@ -18355,10 +18033,9 @@ async function getAllCourseLessons(courseId){
     const snap = await FB.db.collection("courses").doc(courseId)
       .collection("lessons")
       .get();
-    const loaded = await Promise.all(snap.docs.map(function(d){
-      return hydrateLessonContent(courseId, null, Object.assign({ sectionId: null }, d.data(), { id: d.id }));
-    }));
-    loaded.forEach(function(l){ all.push(l); });
+    snap.docs.forEach(function(d){
+      all.push(Object.assign({ sectionId: null }, d.data(), { id: d.id }));
+    });
   }catch(e){}
 
   try{
@@ -18369,10 +18046,9 @@ async function getAllCourseLessons(courseId){
         .collection("sections").doc(secId)
         .collection("lessons")
         .get();
-      const loaded = await Promise.all(snap.docs.map(function(d){
-        return hydrateLessonContent(courseId, secId, Object.assign({ sectionId: secId }, d.data(), { id: d.id }));
-      }));
-      loaded.forEach(function(l){ all.push(l); });
+      snap.docs.forEach(function(d){
+        all.push(Object.assign({ sectionId: secId }, d.data(), { id: d.id }));
+      });
     }
   }catch(e){}
 
@@ -25125,17 +24801,6 @@ window.filterBookPanel = filterBookPanel;
    5. BOOK VIEWER (read-only PDF via PDF.js)
    ═══════════════════════════════════════════════════════════ */
 
-window.downloadCurrentBook = function(){
-  const b=window.__currentBook;
-  if(!b || !b.fileUrl){toast("Download unavailable","This book has no PDF file URL.","error");return;}
-  const a=document.createElement("a"); a.href=b.fileUrl; a.target="_blank"; a.rel="noopener"; a.download=(b.title||"book").replace(/[^a-z0-9-_]+/gi,"-")+".pdf"; document.body.appendChild(a); a.click(); a.remove();
-};
-window.copyCurrentBookInfo = async function(){
-  const b=window.__currentBook; if(!b)return;
-  const text=(b.title||"Untitled")+"\nAuthor: "+(b.author||"Unknown")+"\nCategory: "+(b.category||"Book")+"\n"+(b.fileUrl||"");
-  try{await navigator.clipboard.writeText(text);toast("Copied","Book details and link copied.","success");}catch(e){window.prompt("Copy book details:",text);}
-};
-
 async function openBookViewer(bookId){
   closeReadingPanel();
 
@@ -25166,8 +24831,6 @@ async function openBookViewer(bookId){
           + '<button class="icon-btn" onclick="zoomBook(-1)" title="Zoom out">'
             + '<i class="fa-solid fa-magnifying-glass-minus"></i>'
           + '</button>'
-          + '<button class="icon-btn" onclick="downloadCurrentBook()" title="Download book PDF"><i class="fa-solid fa-download"></i></button>'
-          + '<button class="icon-btn" onclick="copyCurrentBookInfo()" title="Copy book details"><i class="fa-solid fa-copy"></i></button>'
           + '<button class="icon-btn" onclick="closeBookViewer()" '
             + 'aria-label="Close">'
             + '<i class="fa-solid fa-xmark"></i>'
@@ -29645,7 +29308,6 @@ console.log("   · All colors save to settings/website.colors");
           Worship • Learn • Serve • Connect
         </p>
 
-        <div class="social-heading">Follow our community</div>
         <div class="social-row mt-3">
           <a href="https://api.whatsapp.com/send?phone=250786765795"
              target="_blank" rel="noopener"
@@ -29669,7 +29331,7 @@ console.log("   · All colors save to settings/website.colors");
           </a>
         </div>
 
-        <div class="footer-contact mt-3">
+        <div class="mt-3" style="font-size:.85rem;line-height:1.9">
           <div>
             <i class="fa-solid fa-envelope" style="color:#CF9B3F"></i>
             <a href="mailto:habinshutievode001@gmail.com?subject=Message from website">
@@ -34579,36 +34241,64 @@ console.log("✅ Teacher add-students feature loaded");
      CLEANUP UTILITY — Delete orphaned DEMO courses
      ═══════════════════════════════════════════════════════════ -->
 <script>
-window.auditPotentialDuplicateCourses = async function(){
+window.cleanupDemoCourses = async function(){
   const u = currentUser();
   if(!u || u.role !== "superAdmin"){
+    console.error("Only Super Admin can cleanup.");
     toast("Access denied", "Super Admin only.", "error");
     return;
   }
+
+  if(!confirm(
+    "This will DELETE all courses with empty churchId AND no teacherEmail.\n\n"
+    + "These are old DEMO courses that should not exist.\n\n"
+    + "Continue?"
+  )) return;
+
   try{
     const snap = await FB.db.collection("courses").get();
-    const candidates = [];
+    let deleted = 0;
+    let skipped = 0;
+
+    const batch = FB.db.batch();
+
     snap.docs.forEach(function(d){
-      const c = d.data() || {};
-      /* Missing church/teacher fields are a review signal, NOT proof of a demo. */
-      if(!c.churchId && !c.teacherEmail){
-        candidates.push({ id:d.id, title:c.title || c.name || "Untitled course",
-          createdBy:c.createdBy || "", createdAt:c.createdAt || "",
-          departmentId:c.departmentId || "", sectionCount:null,
-          reason:"Missing churchId and teacherEmail; review manually before any deletion." });
+      const c = d.data();
+      const hasChurch  = !!c.churchId && c.churchId.trim() !== "";
+      const hasTeacher = !!c.teacherEmail && c.teacherEmail.trim() !== "";
+
+      /* Delete only orphaned DEMO docs */
+      if(!hasChurch && !hasTeacher){
+        batch.delete(d.ref);
+        deleted++;
+        console.log("  🗑 Deleting:", d.id, "| title:", c.title);
+      }else{
+        skipped++;
       }
     });
-    console.table(candidates);
-    toast("Read-only audit complete", candidates.length +
-      " possible orphan records logged. Nothing was deleted.", "info");
-    return candidates;
+
+    if(deleted > 0){
+      await batch.commit();
+    }
+
+    firestoreClearCache("courses");
+
+    console.log("═══════════════════════════════════════");
+    console.log("  CLEANUP COMPLETE");
+    console.log("═══════════════════════════════════════");
+    console.log("✅ Deleted:", deleted, "orphaned DEMO courses");
+    console.log("⏭️  Kept:", skipped, "real courses");
+
+    toast("Cleanup done", deleted + " DEMO courses deleted.", "success");
+
+    /* Reload the page */
+    setTimeout(function(){ location.reload(); }, 1200);
   }catch(err){
-    console.error("[auditPotentialDuplicateCourses]", err);
-    toast("Audit failed", err.message || "Unable to inspect courses.", "error");
-    return [];
+    console.error("[cleanupDemoCourses]", err);
+    toast("Cleanup failed", err.message, "error");
   }
 };
-console.log("Read-only course audit available: auditPotentialDuplicateCourses(). No records are deleted.");
+console.log("✅ cleanupDemoCourses() available — run to delete DEMO courses");
 </script>
 
 <script>
@@ -34898,10 +34588,10 @@ window.submitRegisterChurch = async function(form){
 
   try{
     /* ── DUPLICATE CODE CHECK ── */
-    const shortInitialsForCheck = extractShortInitials(code);
-    let dup = await FB.db.collection("churches").where("code", "==", code).limit(1).get();
-    if(dup.empty) dup = await FB.db.collection("churches").where("initials", "==", code).limit(1).get();
-    if(dup.empty) dup = await FB.db.collection("churches").where("initials", "==", shortInitialsForCheck).limit(1).get();
+    const dup = await FB.db.collection("churches")
+      .where("initials", "==", code)
+      .limit(1)
+      .get();
     if(!dup.empty){
       const existing = dup.docs[0].data();
       const status = existing.status || "PENDING_APPROVAL";
@@ -38033,14 +37723,18 @@ async function submitLessonForm(courseId, sectionId, existingId, isEdit){
     }else{
       /* Course-level lesson (no section) */
       const now = new Date().toISOString();
-      const ref = lessonDocRef(courseId, null, lessonId);
-      const contentFields = await writeLessonContent(ref, content);
-      const full = Object.assign({}, payload, contentFields, {
-        courseId: courseId, sectionId: null,
-        createdAt: isEdit ? undefined : now, updatedAt: now, updatedBy: u.user
+      const full = Object.assign({}, payload, {
+        courseId:  courseId,
+        sectionId: null,
+        createdAt: isEdit ? undefined : now,
+        updatedAt: now,
+        updatedBy: u.user
       });
       if(isEdit && !full.createdAt) delete full.createdAt;
-      await ref.set(full, { merge: true });
+
+      await FB.db.collection("courses").doc(courseId)
+        .collection("lessons").doc(lessonId)
+        .set(full, { merge: true });
 
       firestoreClearCache("courses");
     }
@@ -52797,7 +52491,6 @@ table.data *,
           { label: "Registration", action: "go('register-apply')" }
         ]
       },
-      { label: "Reading Library / Books", icon: "fa-book-open", action: "openReadingPanel()" },
       { label: "Verify Certificate", icon: "fa-shield-halved", action: "go('verify')" },
       { label: "Portal",   icon: "fa-user-shield",        action: "openPortal()" },
       { label: "Sign In",  icon: "fa-right-to-bracket",   action: "go('login')" },
@@ -52828,8 +52521,8 @@ table.data *,
         });
         html += '</div></div>';
       } else {
-        html += '<a href="#" role="button" class="mobile-nav-link mobile-nav-link-main" '
-          + 'onclick="event.preventDefault();try{' + g.action + ';closeMobile()}catch(err){console.error('Mobile menu action failed',err);if(typeof toast==='function')toast('Could not open','Please try again.','error')} return false;">'
+        html += '<a class="mobile-nav-link mobile-nav-link-main" '
+          + 'onclick="event.preventDefault();' + g.action + ';closeMobile()">'
           + '<i class="fa-solid ' + g.icon + '"></i> ' + g.label
           + '</a>';
       }
@@ -62511,7 +62204,7 @@ console.log("✅ Multi-language helpers loaded");
           }
           if(deptSel){
             const deps=await firestoreRead('departments',{forceRefresh:true}).catch(()=>[]);
-            const eligible=deps.filter(d=>u.role==='superAdmin' || !d.churchId || d.churchId==='__global__' || d.isGlobal===true || d.churchId===u.churchId || (u.role==='teacher' && d.id===existing.departmentId));
+            const eligible=deps.filter(d=>u.role==='superAdmin' || !d.churchId || d.churchId===u.churchId || (u.role==='teacher' && d.id===existing.departmentId));
             deptSel.innerHTML='<option value="">— Select department —</option>'+eligible.map(d=>'<option value="'+safe(d.id)+'" '+(existing.departmentId===d.id?'selected':'')+'>'+safe(d.name || d.title || d.id)+'</option>').join('');
             deptSel.addEventListener('change',refillTeachers);
           }
@@ -62539,18 +62232,15 @@ console.log("✅ Multi-language helpers loaded");
     try{
       const title=form.title.value.trim(), desc=form.desc.value.trim(), level=form.level.value;
       const weeks=parseInt(form.weeks.value,10)||6;
-      const departmentField = $('courseDepartment') || form.querySelector('[name="departmentId"]');
-      const departmentId = departmentField ? String(departmentField.value || '').trim() : '';
+      const departmentId=form.departmentId.value;
       if(title.length<3||desc.length<10||!departmentId){toast('Check course details','Enter a title, description and department.','error');return;}
       const existing=isEdit?await getCourseById(existingId):null;
       if(isEdit && (!existing || !(await canManageCourse(existing,u)))){toast('Access denied','You may view this course but cannot edit it.','error');return;}
       let targetChurchIds=[],allChurches=false,churchId=u.churchId||'';
       if(u.role==='superAdmin'){
         allChurches=!!($('courseAllChurches')&&$('courseAllChurches').checked);
-        const churchPicker = $('courseTargetChurches');
-        targetChurchIds=churchPicker?Array.from(churchPicker.selectedOptions).map(o=>String(o.value || '').trim()).filter(Boolean):[];
+        targetChurchIds=$('courseTargetChurches')?Array.from($('courseTargetChurches').selectedOptions).map(o=>o.value):[];
         if(!allChurches && !targetChurchIds.length){toast('Select churches','Choose one or more churches or select all churches.','error');return;}
-        if(!allChurches && churchPicker && targetChurchIds.some(id=>!Array.from(churchPicker.options).some(o=>o.value===id))){toast('Invalid church selection','Refresh the church list and select valid churches.','error');return;}
         churchId=allChurches?'__global__':targetChurchIds[0];
       }else if(u.role==='churchAdmin'){
         if(!u.churchId){toast('Church missing','Your account is not assigned to a church.','error');return;}
@@ -62580,7 +62270,6 @@ console.log("✅ Multi-language helpers loaded");
       const payload={
         id:courseId,title,desc,level,weeks,weeksCount:weeks,departmentId,
         departmentName:dep?(dep.name||dep.title||''):'',
-        departmentChurchId:dep?(dep.churchId||''):'',
         churchId, targetChurchIds, allChurches,
         teacherEmail:teacherEmail||'', teacherEmails: teacherEmails.length?teacherEmails:(teacherEmail?[teacherEmail]:[]),
         coverImageUrl,videoUrl,gallery,status,
@@ -62625,8 +62314,6 @@ console.log("✅ Multi-language helpers loaded");
   window.listTeacherCourses = window.getVisibleCoursesForTeacher;
   window.listChurchCourses = async function(churchId){
     const all=await loadCourses();
-    /* Empty scope is intentionally reserved for Super Admin platform-wide view. */
-    if(!churchId) return all;
     return all.filter(c=>targetsChurch(c,churchId));
   };
 
@@ -62743,85 +62430,6 @@ console.log("✅ Multi-language helpers loaded");
   });
 
   console.log('SDA course visibility and assignment patch installed');
-})();
-</script>
-
-
-<script>
-/* SDA LEARNING ROUTE RECOVERY PATCH
-   Ensures the public Learning menu always resolves to a valid route. */
-(function SDALearningRouteRecovery(){
-  function ensureLearningRoute(){
-    if(typeof ROUTES === 'undefined') return false;
-    if(typeof ROUTES.learning !== 'function'){
-      ROUTES.learning = function(){
-        const u = typeof currentUser === 'function' ? currentUser() : null;
-        if(!u){
-          return '<section class="section container" style="max-width:560px">'
-            + '<div class="reg-block text-center" style="padding:36px">'
-            + '<div class="e-feature-icon" style="margin:0 auto 18px;width:64px;height:64px">'
-            + '<i class="fa-solid fa-graduation-cap"></i></div>'
-            + '<h2>Learning Center</h2>'
-            + '<p class="muted" style="margin:16px 0 20px">Sign in to access your courses, lessons and progress.</p>'
-            + '<button class="btn btn-primary" onclick="go(\'login\')">Sign In</button> '
-            + '<button class="btn btn-outline" onclick="go(\'register\')">Register</button>'
-            + '</div></section>';
-        }
-        if(u.role === 'student'){
-          setTimeout(function(){ if(typeof go === 'function') go('portal-student'); }, 0);
-          return '<section class="section container"><div class="empty" style="padding:60px 20px">'
-            + '<span class="loader"></span><h3>Opening your Learning Center…</h3></div></section>';
-        }
-        const portal = 'portal-' + String(u.role || 'student');
-        const roleLabel = ({teacher:'Teacher',churchAdmin:'Church Admin',superAdmin:'Super Admin'})[u.role] || 'Learning';
-        return '<section class="section container" style="max-width:560px"><div class="reg-block text-center" style="padding:36px">'
-          + '<div class="e-feature-icon gold" style="margin:0 auto 18px;width:64px;height:64px"><i class="fa-solid fa-chalkboard-user"></i></div>'
-          + '<h2>Learning Center</h2><p class="muted" style="margin:16px 0 20px">Signed in as <strong>' + (typeof esc === 'function' ? esc(roleLabel) : roleLabel) + '</strong>.</p>'
-          + '<button class="btn btn-primary" onclick="go(\'' + portal + '\')">Open Dashboard</button> '
-          + '<button class="btn btn-outline" onclick="go(\'courses\')">Browse Courses</button>'
-          + '</div></section>';
-      };
-    }
-    /* Friendly aliases prevent older menu links from landing on Page not found. */
-    ROUTES.learn = ROUTES.learning;
-    ROUTES['learning-center'] = ROUTES.learning;
-    return true;
-  }
-  ensureLearningRoute();
-  /* Retry after other legacy scripts finish registering routes. */
-  if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', ensureLearningRoute, {once:true});
-  }
-  console.log('[SDA] Learning route recovery ready');
-})();
-
-</script>
-<!-- SDA PLATFORM CONSISTENCY PATCH — Church/course/department counts + edit recovery -->
-<script>
-(function SDAChurchConsistencyPatch(){
-  if(window.__sdaChurchConsistencyPatch)return;window.__sdaChurchConsistencyPatch=true;
-  function targets(c,id){return !!c&&!!id&&(c.allChurches===true||c.churchId===id||(Array.isArray(c.targetChurchIds)&&c.targetChurchIds.indexOf(id)!==-1));}
-  window.sdaCourseTargetsChurch=targets;
-  ROUTES["super-churches"]=function(){
-    const u=requireSuperAdmin();if(!u)return "";
-    setTimeout(async function(){const host=document.getElementById("superChurchesHost");if(!host)return;
-      try{
-        const results=await Promise.all([firestoreRead("churches",{forceRefresh:true}),firestoreRead("users",{forceRefresh:true}),firestoreRead("courses",{forceRefresh:true}),firestoreRead("departments",{forceRefresh:true})]);
-        const churches=results[0],users=results[1],courses=results[2],departments=results[3];
-        window.__allChurches=churches;window.__allChurchUsers=users;window.__allChurchCourses=courses;window.__allChurchDepartments=departments;
-        if(!churches.length){host.innerHTML='<div class="empty"><h3>No churches yet</h3><button class="btn btn-primary" onclick="openAddChurchModal()">Create First Church</button></div>';return;}
-        host.innerHTML='<div class="reg-block" style="padding:0;overflow:auto"><table class="data" style="margin:0;min-width:760px"><thead><tr><th>Church</th><th>Location / Code</th><th>Users</th><th>Departments</th><th>Courses</th><th>Actions</th></tr></thead><tbody>'+churches.map(function(c){
-          const id=String(c.id||c.churchId||"");const uc=users.filter(function(x){return String(x.churchId||"")===id;}).length;
-          const ds=departments.filter(function(d){return String(d.churchId||"")===id||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(id)!==-1);});const cs=courses.filter(function(x){return targets(x,id);});
-          return '<tr data-church-id="'+esc(id)+'"><td><strong>'+esc(c.name||"Unnamed church")+'</strong><br><small class="muted">ID: '+esc(id)+'</small><br><small>'+esc(c.status||"ACTIVE")+'</small></td><td>'+esc(c.location||"—")+'<br><strong>'+esc(c.code||c.initials||"No code")+'</strong></td><td>'+uc+'</td><td><strong>'+ds.length+'</strong> '+(!ds.length?'<span style="color:#B45309">· None assigned</span>':'')+'</td><td><strong>'+cs.length+'</strong> '+(!cs.length?'<span style="color:#B45309">· None assigned</span>':'')+'</td><td style="white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="openEditChurchModal(\''+esc(id)+'\')" title="Edit church"><i class="fa-solid fa-pen"></i></button> <button class="btn btn-outline btn-sm" onclick="sdaShowChurchAssignments(\''+esc(id)+'\')"><i class="fa-solid fa-list-check"></i> Inspect</button></td></tr>';
-        }).join("")+'</tbody></table></div>';
-      }catch(err){console.error("[Church Management]",err);host.innerHTML='<div class="empty"><h3>Could not load church data</h3><p>'+esc(err.message||"Check Firestore permissions and refresh.")+'</p></div>';}
-    },40);
-    return '<section class="page-header"><div class="container">'+breadcrumbs([{label:"Home",route:"home"},{label:"Dashboard",route:"portal-superAdmin"},{label:"Churches"}])+'<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap"><div><h1 style="margin:0">Church Management</h1><p style="margin:8px 0 0;opacity:.9">Review each church, its departments, and its assigned courses.</p></div><button class="btn btn-gold" onclick="openAddChurchModal()"><i class="fa-solid fa-plus"></i> Add Church</button></div></div></section><section class="section container" style="max-width:1250px"><div id="superChurchesHost"><div class="empty"><span class="loader"></span><h3>Loading churches…</h3></div></div></section>';
-  };
-  window.sdaShowChurchAssignments=function(id){const c=(window.__allChurches||[]).find(function(x){return String(x.id||x.churchId)===String(id);});const ds=(window.__allChurchDepartments||[]).filter(function(d){return String(d.churchId||"")===String(id)||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(id)!==-1);});const cs=(window.__allChurchCourses||[]).filter(function(x){return targets(x,id);});alert((c?c.name:"Church")+"\n\nDEPARTMENTS ("+ds.length+")\n"+(ds.length?ds.map(function(d){return "• "+(d.name||d.title||d.id);}).join("\n"):"No church-specific departments assigned.")+"\n\nCOURSES ("+cs.length+")\n"+(cs.length?cs.map(function(x){return "• "+(x.title||x.name||x.id)+" ["+(x.status||"no status")+"]";}).join("\n"):"No courses target this church."));};
-  document.addEventListener("change",async function(ev){const t=ev.target;if(!t||!t.closest||!t.closest("#editUserForm")||t.name!=="churchId")return;const sel=t.closest("#editUserForm").querySelector('[name="departmentId"]');if(!sel)return;try{const ds=await firestoreRead("departments",{forceRefresh:true}),old=sel.value,filtered=ds.filter(function(d){return !d.churchId||d.churchId===t.value||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(t.value)!==-1);});sel.innerHTML='<option value="">— Select department —</option>'+filtered.map(function(d){return '<option value="'+esc(d.id)+'"'+(d.id===old?' selected':'')+'>'+esc(d.name||d.title||d.id)+'</option>';}).join("");}catch(e){console.warn("[department dropdown]",e);}});
-  console.log("SDA church consistency patch installed");
 })();
 </script>
 
