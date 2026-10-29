@@ -14967,13 +14967,12 @@ window.openEditUserModal = async function(uid){
 
   const filteredDepts = userDoc.churchId
     ? departments.filter(function(d){ return window.sdaDepartmentVisibleInChurch ? window.sdaDepartmentVisibleInChurch(d, userDoc.churchId) : (d.churchId === userDoc.churchId || d.churchId === "__global__" || d.isGlobal === true); })
-    : departments.filter(function(d){ return d.churchId === "__global__" || d.isGlobal === true || d.allChurches === true || d.scope === "global"; });
+    : departments.filter(function(d){ return d.churchId === "__global__" || d.isGlobal === true || d.createdByRole === "superAdmin"; });
 
   const deptOptions = filteredDepts.map(function(d){
-    const did=String(d.id || d.departmentId || "");
-    return '<option value="' + esc(did) + '"'
-      + (String(userDoc.departmentId || "") === did ? ' selected' : '') + '>'
-      + esc(d.name || d.title || did) + '</option>';
+    return '<option value="' + esc(d.id) + '"'
+      + (userDoc.departmentId === d.id ? ' selected' : '') + '>'
+      + esc(d.name) + '</option>';
   }).join("");
 
   const roles = ["student", "teacher", "churchAdmin", "superAdmin"];
@@ -15063,29 +15062,6 @@ window.openEditUserModal = async function(uid){
     + '</div>';
 
   document.body.insertAdjacentHTML("beforeend", html);
-  /* Populate the Edit User department selector from the same global + church-local
-     department source used by registration. This avoids an empty/stale dropdown. */
-  (async function hydrateEditDepartmentSelector(){
-    const form=document.getElementById("editUserForm");
-    if(!form) return;
-    const churchSel=form.querySelector('[name="churchId"]');
-    const deptSel=form.querySelector('[name="departmentId"]');
-    if(!deptSel) return;
-    const churchId=churchSel ? churchSel.value : (actor.churchId || userDoc.churchId || "");
-    const selected=String(userDoc.departmentId || deptSel.value || "");
-    try{
-      let ds=[];
-      if(churchId && typeof window.getDepartmentsForChurchAsync === "function") ds=await window.getDepartmentsForChurchAsync(churchId);
-      else ds=(await firestoreRead("departments",{forceRefresh:true})).filter(function(d){return d.churchId==="__global__"||d.isGlobal===true||d.allChurches===true||d.scope==="global";});
-      /* Keep the existing department visible if legacy data uses a valid ID not in the normal active list. */
-      if(selected && !ds.some(function(d){return String(d.id||d.departmentId||"")===selected;})){
-        const legacy=departments.find(function(d){return String(d.id||d.departmentId||"")===selected;});
-        if(legacy && (!churchId || !window.sdaDepartmentVisibleInChurch || window.sdaDepartmentVisibleInChurch(legacy,churchId))) ds.push(legacy);
-      }
-      deptSel.innerHTML='<option value="">— Select department —</option>'+ds.map(function(d){const id=String(d.id||d.departmentId||"");return '<option value="'+esc(id)+'"'+(id===selected?' selected':'')+'>'+esc(d.name||d.title||id)+'</option>';}).join("");
-      if(selected) deptSel.value=selected;
-    }catch(err){console.warn("[edit user departments]",err);deptSel.innerHTML='<option value="">Could not load departments</option>';}
-  })();
   if(actor.role === "churchAdmin"){
     const form = document.getElementById("editUserForm");
     if(form){
@@ -33291,16 +33267,10 @@ window.openAssignTeacherModal = async function(teacherEmail){
     let myCourses = courses;
     if(u.role === "churchAdmin"){
       myDepts = departments.filter(function(d){
-        return window.sdaDepartmentVisibleInChurch
-          ? window.sdaDepartmentVisibleInChurch(d, u.churchId)
-          : (d.churchId === u.churchId || d.churchId === "__global__" || d.isGlobal === true || d.allChurches === true);
+        return d.churchId === u.churchId || !d.churchId;
       });
       myCourses = courses.filter(function(c){
-        const status=String(c.status||"").toUpperCase();
-        if(status !== "PUBLISHED") return false;
-        const globalCourse=c.allChurches===true || c.churchId==="__global__" || c.scope==="global";
-        const targets=Array.isArray(c.targetChurchIds) ? c.targetChurchIds.map(String) : [];
-        return globalCourse || String(c.churchId||"")===String(u.churchId) || targets.includes(String(u.churchId));
+        return c.churchId === u.churchId;
       });
     }
 
@@ -62921,9 +62891,8 @@ console.log("✅ Multi-language helpers loaded");
     const t=ev.target; if(!t || !t.closest || !t.closest("#editUserForm") || t.name!=="churchId") return;
     const form=t.closest("#editUserForm"), sel=form.querySelector('[name="departmentId"]'); if(!sel) return;
     try{
-      const old=String(sel.value||""), ds=await window.getDepartmentsForChurchAsync(t.value);
-      sel.innerHTML='<option value="">— Select department —</option>'+ds.map(function(d){const id=String(d.id||d.departmentId||"");return '<option value="'+esc(id)+'"'+(id===old?' selected':'')+'>'+esc(d.name||d.title||id)+'</option>';}).join("");
-      if(old && ds.some(function(d){return String(d.id||d.departmentId||"")===old;})) sel.value=old;
+      const old=sel.value, ds=await window.getDepartmentsForChurchAsync(t.value);
+      sel.innerHTML='<option value="">— Select department —</option>'+ds.map(function(d){return '<option value="'+esc(d.id)+'"'+(d.id===old?' selected':'')+'>'+esc(d.name||d.title||d.id)+'</option>';}).join("");
     }catch(e){console.warn("[department dropdown]",e);sel.innerHTML='<option value="">Could not load departments</option>';}
   });
   console.log("SDA church consistency patch installed");
@@ -62945,18 +62914,16 @@ console.log("✅ Multi-language helpers loaded");
      Super Admin department. Unassigned church-admin departments are not global. */
   window.sdaDepartmentVisibleInChurch=function(d, churchId){
     if(!d || !churchId) return false;
-    const ownerChurch=String(d.churchId || d.ownerChurchId || d.createdForChurchId || d.church || "");
-    const globalDept=d.churchId==="__global__" || d.isGlobal===true || d.allChurches===true || d.scope==="global" || d.visibility==="global" ||
-      (!ownerChurch && (d.createdByRole==="superAdmin" || d.createdByRole==="superadmin"));
-    const linkedChurches=Array.isArray(d.churchIds)?d.churchIds.map(String):[];
-    return globalDept || ownerChurch===String(churchId) || linkedChurches.includes(String(churchId));
+    const globalDept=d.churchId==="__global__" || d.isGlobal===true || d.allChurches===true ||
+      (!d.churchId && d.createdByRole==="superAdmin");
+    return globalDept || d.churchId===churchId || (Array.isArray(d.churchIds)&&d.churchIds.includes(churchId));
   };
   window.getDepartmentsForChurchAsync=async function(churchId){
     if(!churchId) return [];
     const all=await firestoreRead("departments",{forceRefresh:true});
     return all.filter(d=>window.sdaDepartmentVisibleInChurch(d,churchId))
-      .filter(d=>!d.status || !["REJECTED","ARCHIVED","DISABLED"].includes(String(d.status).toUpperCase()))
-      .sort((a,b)=>(String(a.churchId||a.ownerChurchId||"")===String(churchId)?0:1)-(String(b.churchId||b.ownerChurchId||"")===String(churchId)?0:1)||String(a.name||a.title||"").localeCompare(String(b.name||b.title||"")));
+      .filter(d=>!d.status || d.status!=="REJECTED")
+      .sort((a,b)=>(a.churchId===churchId?0:1)-(b.churchId===churchId?0:1)||String(a.name||a.title||"").localeCompare(String(b.name||b.title||"")));
   };
 
   /* Teacher assignment modal: show only this church's departments plus global departments. */
