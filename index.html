@@ -7309,7 +7309,10 @@ async function loadStudentDashboard(){
 
     await Promise.all(courses.map(async function(item){
       const cid = item.course.id;
-      const assignments = await listCourseAssignments(cid);
+      const assignments = await listCourseAssignments(cid).catch(function(err){
+        console.warn("[portal-student] Assignments unavailable for course", cid, err);
+        return [];
+      });
 
       await Promise.all(assignments.map(async function(a){
         try{
@@ -7350,7 +7353,10 @@ async function loadStudentDashboard(){
     const recentGrades = [];
     await Promise.all(courses.map(async function(item){
       const cid = item.course.id;
-      const assignments = await listCourseAssignments(cid);
+      const assignments = await listCourseAssignments(cid).catch(function(err){
+        console.warn("[portal-student] Assignments unavailable for course", cid, err);
+        return [];
+      });
 
       await Promise.all(assignments.map(async function(a){
         try{
@@ -33112,7 +33118,7 @@ ROUTES["admin-teachers"] = function(){
       + '<div>'
         + '<h1 style="margin:0">Teacher Management</h1>'
         + '<p style="opacity:.9;margin:8px 0 0">'
-          + 'Assign teachers to departments and courses</p>'
+          + (u.role === "churchAdmin" ? 'Manage teachers, departments, and course assignments for your church' : 'Manage teachers across the platform and assign departments and courses') + '</p>'
       + '</div>'
       + '<button class="btn btn-gold" onclick="openAddTeacherModal()">'
         + '<i class="fa-solid fa-plus"></i> Add Teacher</button>'
@@ -33133,59 +33139,44 @@ ROUTES["admin-teachers"] = function(){
 async function loadAdminTeachers(){
   const host = document.getElementById("adminTeachersHost");
   if(!host) return;
-
   const u = currentUser();
   if(!u) return;
-
   try{
     const users = await firestoreRead("users", { forceRefresh: true });
-    let teachers = users.filter(function(x){ return x.role === "teacher"; });
-
-    /* Filter by church for church admin */
+    let teachers = users.filter(function(x){ return String(x.role||"").toLowerCase() === "teacher"; });
     if(u.role === "churchAdmin"){
-      teachers = teachers.filter(function(t){
-        return !!u.churchId && t.churchId === u.churchId;
-      });
+      if(!u.churchId) throw new Error("Your Church Admin account has no church assigned. Ask the Super Admin to set your church.");
+      teachers = teachers.filter(function(t){ return String(t.churchId||"") === String(u.churchId); });
+    } else if(u.role !== "superAdmin") {
+      throw new Error("You do not have permission to manage teachers.");
     }
 
-    /* Load assignments */
-    const assignmentsSnap = await FB.db.collection("teacherAssignments")
-      .limit(200)
-      .get();
-    const assignments = assignmentsSnap.docs.map(function(d){
-      return Object.assign({ id: d.id }, d.data());
-    });
-
-    /* Attach assignment to each teacher */
+    /* Query assignments by tenant for Church Admin. Do not load or expose another
+       church's teacher assignments in this management page. */
+    let assignmentQuery = FB.db.collection("teacherAssignments");
+    if(u.role === "churchAdmin") assignmentQuery = assignmentQuery.where("churchId", "==", u.churchId);
+    const assignmentsSnap = await assignmentQuery.limit(500).get();
+    const assignments = assignmentsSnap.docs.map(function(d){ return Object.assign({id:d.id}, d.data()); });
     teachers.forEach(function(t){
       t._assignment = assignments.find(function(a){
-        return (a.teacherEmail || "").toLowerCase() === (t.email || "").toLowerCase();
+        return String(a.teacherEmail||"").toLowerCase() === String(t.email||"").toLowerCase()
+          && (u.role !== "churchAdmin" || String(a.churchId||"") === String(u.churchId));
       }) || null;
     });
-
     window.__adminTeachers = teachers;
     window.__teacherAssignments = assignments;
-
-    /* Render */
     if(!teachers.length){
       host.innerHTML = '<div class="empty" style="padding:60px 24px">'
-        + '<div class="e-feature-icon gold" '
-          + 'style="margin:0 auto 18px;width:72px;height:72px;font-size:1.8rem">'
-          + '<i class="fa-solid fa-user-tie"></i></div>'
-        + '<h3 style="color:var(--navy);margin-bottom:8px">No teachers yet</h3>'
-        + '<p class="muted" style="max-width:420px;margin:0 auto 20px">'
-          + 'Add your first teacher to get started.</p>'
-        + '<button class="btn btn-primary" onclick="openAddTeacherModal()">'
-          + '<i class="fa-solid fa-plus"></i> Add Teacher</button>'
-        + '</div>';
+        + '<div class="e-feature-icon gold" style="margin:0 auto 18px;width:72px;height:72px;font-size:1.8rem"><i class="fa-solid fa-user-tie"></i></div>'
+        + '<h3 style="color:var(--navy);margin-bottom:8px">No teachers found for your church</h3>'
+        + '<p class="muted" style="max-width:420px;margin:0 auto 20px">Add a teacher to your church to get started.</p>'
+        + '<button class="btn btn-primary" onclick="openAddTeacherModal()"><i class="fa-solid fa-plus"></i> Add Teacher</button></div>';
       return;
     }
-
     host.innerHTML = renderAdminTeachersTable(teachers);
   }catch(err){
     console.error("[loadAdminTeachers]", err);
-    host.innerHTML = '<div class="empty"><h3>Could not load</h3>'
-      + '<p class="muted">' + esc(err.message) + '</p></div>';
+    host.innerHTML = '<div class="empty"><h3>Could not load teachers</h3><p class="muted">' + esc(err.message || "Please check your access and try again.") + '</p><button class="btn btn-primary" onclick="loadAdminTeachers()">Retry</button></div>';
   }
 }
 window.loadAdminTeachers = loadAdminTeachers;
@@ -33258,7 +33249,7 @@ function renderAdminTeachersTable(teachers){
                   + 'title="Assign departments + courses">'
                   + '<i class="fa-solid fa-diagram-project"></i> Assign</button> '
                 + '<button class="btn btn-outline btn-sm" '
-                  + 'onclick="openEditUserModal(\'' + esc(t.uid || t.id) + '\')" '
+                  + 'onclick="editManagedTeacherProfile(\'' + esc(t.uid || t.id) + '\')" '
                   + 'title="Edit profile">'
                   + '<i class="fa-solid fa-pen"></i></button> '
                 + (a
@@ -33277,8 +33268,34 @@ function renderAdminTeachersTable(teachers){
 }
 window.renderAdminTeachersTable = renderAdminTeachersTable;
 
+/* Tenant-safe edit profile entry used by Teacher Management. */
+window.editManagedTeacherProfile = async function(uidOrId){
+  const u = currentUser();
+  if(!u || !["churchAdmin","superAdmin"].includes(u.role)) return;
+  try{
+    const users = await firestoreRead("users", {forceRefresh:true});
+    const teacher = users.find(function(t){ return String(t.uid||t.id||t.userId||"") === String(uidOrId); });
+    if(!teacher || String(teacher.role||"").toLowerCase() !== "teacher"){
+      toast("Not found", "Teacher profile not found.", "error"); return;
+    }
+    if(u.role === "churchAdmin" && (!u.churchId || String(teacher.churchId||"") !== String(u.churchId))){
+      toast("Access denied", "You can edit teacher profiles in your church only.", "error"); return;
+    }
+    if(typeof openEditUserModal === "function") return openEditUserModal(uidOrId);
+    toast("Unavailable", "The existing profile editor could not be opened.", "error");
+  }catch(err){ toast("Could not open profile", err.message || "Please retry.", "error"); }
+};
+
 /* Remove assignment */
 window.removeTeacherAssignment = async function(id){
+  const u = currentUser();
+  if(!u || !["churchAdmin","superAdmin"].includes(u.role)) return;
+  if(u.role === "churchAdmin"){
+    const assignment = (window.__teacherAssignments||[]).find(function(a){return String(a.id)===String(id);});
+    if(!assignment || String(assignment.churchId||"") !== String(u.churchId||"")){
+      toast("Access denied", "You can remove assignments in your church only.", "error"); return;
+    }
+  }
   if(!confirm("Remove this teacher's assignment? They will only see their own courses.")) return;
   try{
     await deleteTeacherAssignment(id);
@@ -33310,14 +33327,16 @@ window.openAssignTeacherModal = async function(teacherEmail){
     ]);
 
     const teacher = users.find(function(x){
-      return (x.email || "").toLowerCase() === teacherEmail.toLowerCase();
+      return (x.email || "").toLowerCase() === teacherEmail.toLowerCase()
+        && String(x.role||"").toLowerCase() === "teacher";
     });
-    if(!teacher){
-      toast("Not found", "Teacher missing.", "error");
-      return;
+    if(!teacher){ toast("Not found", "Teacher missing.", "error"); return; }
+    if(u.role === "churchAdmin" && (!u.churchId || String(teacher.churchId||"") !== String(u.churchId))){
+      toast("Access denied", "Church Admins can assign teachers from their own church only.", "error"); return;
     }
 
-    const existing = await getTeacherAssignment(teacher.email);
+    let existing = await getTeacherAssignment(teacher.email);
+    if(existing && u.role === "churchAdmin" && String(existing.churchId||"") !== String(u.churchId)) existing = null;
     const assignedDeptIds = existing ? (existing.departmentIds || []) : [];
     const assignedCourseIds = existing ? (existing.courseIds || []) : [];
 
@@ -33346,7 +33365,7 @@ window.openAssignTeacherModal = async function(teacherEmail){
 
     /* Only PUBLISHED courses */
     myCourses = myCourses.filter(function(c){
-      return c.status === "PUBLISHED";
+      return String(c.status || "").toUpperCase() === "PUBLISHED";
     });
 
     const deptCheckboxes = myDepts.length
@@ -33535,14 +33554,22 @@ window.submitTeacherAssignment = async function(teacherEmail, existingId){
   /* Load teacher info */
   const users = await firestoreRead("users", { forceRefresh: true });
   const teacher = users.find(function(x){
-    return (x.email || "").toLowerCase() === teacherEmail.toLowerCase();
+    return (x.email || "").toLowerCase() === teacherEmail.toLowerCase()
+      && String(x.role||"").toLowerCase() === "teacher";
   });
+  if(!teacher){ toast("Save failed", "Teacher account was not found.", "error"); return; }
+  if(u.role === "churchAdmin" && (!u.churchId || String(teacher.churchId||"") !== String(u.churchId))){
+    toast("Access denied", "You can manage teachers in your church only.", "error"); return;
+  }
+  if(u.role !== "churchAdmin" && u.role !== "superAdmin"){
+    toast("Access denied", "Only administrators can assign teachers.", "error"); return;
+  }
 
   const payload = {
     id:            existingId || undefined,
     teacherEmail:  teacherEmail.toLowerCase(),
     teacherName:   teacher ? (teacher.name || teacher.email) : teacherEmail,
-    churchId:      teacher && teacher.churchId ? teacher.churchId : (u.churchId || ""),
+    churchId:      teacher.churchId || (u.role === "churchAdmin" ? u.churchId : ""),
     departmentIds: departmentIds,
     courseIds:     courseIds
   };
@@ -33573,23 +33600,66 @@ window.submitTeacherAssignment = async function(teacherEmail, existingId){
 
 window.openAddTeacherModal = function(){
   const u = currentUser();
-  if(!u) return;
-
-  /* Reuse the existing add user modal but default to teacher role */
-  if(typeof openAddUserModal === "function"){
-    openAddUserModal();
-    /* Set role dropdown to teacher after render */
-    setTimeout(function(){
-      const sel = document.querySelector('#addUserForm select[name="role"]');
-      if(sel){
-        sel.value = "teacher";
-        if(typeof toggleChurchFields === "function"){
-          toggleChurchFields("teacher");
-        }
-      }
-    }, 100);
-  }else{
-    toast("Not available", "Add user form missing.", "error");
+  if(!u || !["churchAdmin","superAdmin"].includes(u.role)){
+    toast("Access denied", "Only administrators can add teachers.", "error"); return;
+  }
+  /* Super Admin keeps the existing full user-creation workflow. Church Admin gets
+     a teacher-only form locked to their own church, not the platform-wide form. */
+  if(u.role === "superAdmin"){
+    if(typeof openAddUserModal === "function"){
+      openAddUserModal();
+      setTimeout(function(){
+        const sel = document.querySelector('#addUserForm select[name="role"]');
+        if(sel){ sel.value = "teacher"; if(typeof toggleChurchFields === "function") toggleChurchFields("teacher"); }
+      }, 100);
+    }else toast("Not available", "Add user form missing.", "error");
+    return;
+  }
+  if(!u.churchId){ toast("Church not assigned", "Ask the Super Admin to assign your account to a church.", "error"); return; }
+  const html = '<div id="addChurchTeacherModal" class="reg-card-modal">'
+    + '<div class="reg-card-modal-backdrop" onclick="closeAddChurchTeacherModal()"></div>'
+    + '<div class="reg-card-modal-inner" style="max-width:600px"><button class="reg-card-modal-close" onclick="closeAddChurchTeacherModal()"><i class="fa-solid fa-xmark"></i></button>'
+    + '<div style="background:#fff;border-radius:20px;overflow:hidden;border:1px solid var(--border)">'
+    + '<div style="background:linear-gradient(135deg,#CF9B3F,#E7C583);color:#1B2A44;padding:20px 26px"><div style="font-weight:800;font-size:1.05rem"><i class="fa-solid fa-user-plus"></i> Add Teacher to Your Church</div><div style="font-size:.82rem;margin-top:4px">This teacher will belong to your church.</div></div>'
+    + '<form id="addChurchTeacherForm" onsubmit="event.preventDefault();submitAddChurchTeacher();" style="padding:24px">'
+    + '<div class="reg-grid-2"><div class="form-group"><label>Full Name *</label><input name="name" required minlength="3" maxlength="80"></div><div class="form-group"><label>Email *</label><input name="email" type="email" required></div></div>'
+    + '<div class="form-group"><label>Temporary Password *</label><input name="password" type="text" required minlength="6" value="Welcome123"></div>'
+    + '<div class="form-group"><label>Department</label><select name="departmentId" id="addChurchTeacherDept"><option value="">Loading departments…</option></select></div>'
+    + '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px"><button type="button" class="btn btn-outline" onclick="closeAddChurchTeacherModal()">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-check"></i> Create Teacher</button></div>'
+    + '</form></div></div></div>';
+  const old=document.getElementById("addChurchTeacherModal"); if(old) old.remove();
+  document.body.insertAdjacentHTML("beforeend",html); document.body.style.overflow="hidden";
+  setTimeout(async function(){
+    const sel=document.getElementById("addChurchTeacherDept"); if(!sel) return;
+    try{
+      const depts=await window.getDepartmentsForChurchAsync(u.churchId);
+      sel.innerHTML='<option value="">— Select department —</option>'+depts.map(function(d){const id=String(d.id||d.departmentId||"");return '<option value="'+esc(id)+'">'+esc(d.name||d.title||id)+'</option>';}).join("");
+      if(!depts.length) sel.innerHTML='<option value="">No departments available</option>';
+    }catch(e){console.warn("[add church teacher departments]",e);sel.innerHTML='<option value="">Could not load departments</option>';}
+  },0);
+};
+window.closeAddChurchTeacherModal=function(){const m=document.getElementById("addChurchTeacherModal");if(m)m.remove();document.body.style.overflow="";};
+window.submitAddChurchTeacher=async function(){
+  const u=currentUser(), form=document.getElementById("addChurchTeacherForm");
+  if(!u||u.role!=="churchAdmin"||!u.churchId||!form){toast("Access denied","Church Admin access is required.","error");return;}
+  const name=form.name.value.trim(), email=form.email.value.trim().toLowerCase(), password=form.password.value, departmentId=form.departmentId.value||"";
+  if(!name||!email||password.length<6){toast("Missing details","Enter a name, valid email, and password of at least 6 characters.","error");return;}
+  const btn=form.querySelector('button[type="submit"]'), original=btn.innerHTML;btn.disabled=true;btn.innerHTML='<span class="loader"></span> Creating…';
+  let secondaryApp=null;
+  try{
+    secondaryApp=firebase.initializeApp(firebaseConfig,"secondary_church_teacher_"+Date.now());
+    const auth=secondaryApp.auth(); const cred=await auth.createUserWithEmailAndPassword(email,password); const uid=cred.user.uid;
+    try{await cred.user.updateProfile({displayName:name});}catch(e){}
+    await auth.signOut();
+    const payload={uid:uid,email:email,name:name,role:"teacher",churchId:u.churchId,departmentId:departmentId,phone:"",gender:"",status:"ACTIVE",createdAt:firebase.firestore.FieldValue.serverTimestamp(),createdBy:u.user,createdByRole:"churchAdmin"};
+    await FB.db.collection("users").doc(uid).set(payload);
+    try{await secondaryApp.delete();}catch(e){}
+    firestoreClearCache("users"); toast("Teacher created",name+" has been added to your church.","success"); closeAddChurchTeacherModal(); await loadAdminTeachers();
+  }catch(err){
+    console.error("[submitAddChurchTeacher]",err);
+    try{if(secondaryApp){await secondaryApp.auth().signOut();await secondaryApp.delete();}}catch(e){}
+    let msg=err.message||"Could not create teacher."; if(err.code==="auth/email-already-in-use")msg="This email is already registered.";
+    toast("Could not create teacher",msg,"error");btn.disabled=false;btn.innerHTML=original;
   }
 };
 
