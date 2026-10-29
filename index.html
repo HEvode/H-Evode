@@ -5311,7 +5311,19 @@ ROUTES.home.after = function(){
 
     try{
       const courses = await Promise.race([
-        firestoreRead("courses", { forceRefresh: true }),
+        (async function(){
+          /* Home is public: use live public course metadata and display only
+             published courses to visitors and signed-in users. */
+          try {
+            const snap = await FB.db.collection("courses").get();
+            return snap.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); })
+              .filter(function(c){ return String(c.status || "").toUpperCase() === "PUBLISHED"; });
+          } catch(readError) {
+            console.warn("[home] live course read failed; trying helper", readError);
+            return (await firestoreRead("courses", { forceRefresh: true }))
+              .filter(function(c){ return String(c.status || "").toUpperCase() === "PUBLISHED"; });
+          }
+        })(),
         new Promise(function(_, reject){
           setTimeout(function(){ reject(new Error("Timeout after 8s")); }, 8000);
         })
@@ -5928,7 +5940,16 @@ ROUTES.courses = function(){
     if(!host) return;
 
     try{
-      let allCourses = await firestoreRead("courses", { forceRefresh: true });
+      let allCourses = [];
+      try {
+        const liveSnap = await FB.db.collection("courses").get();
+        allCourses = liveSnap.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); })
+          .filter(function(c){ return String(c.status || "").toUpperCase() === "PUBLISHED"; });
+      } catch(liveReadError) {
+        console.warn("[courses] Direct public read failed; using cache helper", liveReadError);
+        allCourses = (await firestoreRead("courses", { forceRefresh: true }))
+          .filter(function(c){ return String(c.status || "").toUpperCase() === "PUBLISHED"; });
+      }
 
       /* Apply department filter if set */
       if(filter && filter.type === "department"){
@@ -7246,9 +7267,23 @@ async function loadStudentDashboard(){
       const course = await getCourseById(enr.courseId);
       if(!course) return null;
 
-      const sections = await listSections(enr.courseId);
+      /* A single course with legacy or mismatched content permissions must not
+         prevent the entire student dashboard from rendering. Published course
+         content is public under the matching Firestore rules; if an old course
+         still fails, keep the enrolled course card visible and report the detail. */
+      let sections = [];
+      try {
+        sections = await listSections(enr.courseId);
+      } catch(sectionError) {
+        console.warn('[portal-student] Sections unavailable for course', enr.courseId,
+          sectionError && sectionError.code, sectionError && sectionError.message);
+      }
       const lessonCounts = await Promise.all(sections.map(function(s){
-        return listLessons(enr.courseId, s.id).then(function(l){ return l.length; });
+        return listLessons(enr.courseId, s.id).then(function(l){ return l.length; })
+          .catch(function(lessonError){
+            console.warn('[portal-student] Lessons unavailable for section', s.id, lessonError);
+            return 0;
+          });
       }));
       const totalLessons = lessonCounts.reduce(function(a, b){ return a + b; }, 0);
 
@@ -52905,7 +52940,7 @@ table.data *,
         html += '</div></div>';
       } else {
         html += '<a href="#" role="button" class="mobile-nav-link mobile-nav-link-main" '
-          + 'onclick="event.preventDefault();try{' + g.action + ';closeMobile()}catch(err){console.error('Mobile menu action failed',err);if(typeof toast==='function')toast('Could not open','Please try again.','error')} return false;">'
+          + 'onclick="event.preventDefault();try{' + g.action + ';closeMobile()}catch(err){console.error(\'Mobile menu action failed\',err);if(typeof toast===\'function\')toast(\'Could not open\',\'Please try again.\',\'error\')} return false;">'
           + '<i class="fa-solid ' + g.icon + '"></i> ' + g.label
           + '</a>';
       }
@@ -62757,8 +62792,19 @@ console.log("✅ Multi-language helpers loaded");
       setTimeout(async()=>{
         const host=$('coursesGrid'); if(!host) return;
         try{
-          const u=user(); const all=await loadCourses();
-          let courses=all.filter(c=>c.status==='PUBLISHED');
+          const u=user();
+          /* Public course metadata is readable to visitors by Firestore rules.
+             Query the live collection directly so stale role-scoped caches do not
+             hide published courses from guests or signed-in users. */
+          let all=[];
+          try {
+            const snap=await FB.db.collection('courses').get();
+            all=snap.docs.map(d=>Object.assign({id:d.id},d.data()));
+          } catch(readError) {
+            console.error('[public course catalog] live read failed',readError);
+            all=await loadCourses();
+          }
+          let courses=all.filter(c=>String(c.status||'').toUpperCase()==='PUBLISHED');
           let filter=null;try{const raw=sessionStorage.getItem('sda_course_filter');if(raw)filter=JSON.parse(raw);}catch(e){}
           /* Home catalog intentionally lists every published course; course content remains permission-gated. */
           const depts=await firestoreRead('departments',{forceRefresh:true}).catch(()=>[]);
