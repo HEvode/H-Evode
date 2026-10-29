@@ -14810,25 +14810,16 @@ window.openAddUserModal = async function(){
 };
 
 window.loadDepartmentsForAddUser = async function(churchId){
-  const sel = document.getElementById("addUserDept");
-  if(!sel) return;
-  if(!churchId){
-    sel.innerHTML = '<option value="">— Pick church first —</option>';
-    return;
-  }
+  const sel=document.getElementById("addUserDept"); if(!sel) return;
+  if(!churchId){sel.innerHTML='<option value="">— Pick church first —</option>';return;}
+  sel.innerHTML='<option value="">Loading departments…</option>';
   try{
-    const all  = await firestoreRead("departments", { forceRefresh: true });
-    const list = all.filter(function(d){ return d.churchId === churchId; });
-    const source = list.length ? list : all;
-
-    sel.innerHTML = '<option value="">— Select department —</option>'
-      + source.map(function(d){
-          return '<option value="' + esc(d.id) + '">'
-            + (d.icon || "") + ' ' + esc(d.name) + '</option>';
-        }).join("");
-  }catch(err){
-    console.error("[loadDepartmentsForAddUser]", err);
-  }
+    const list=await window.getDepartmentsForChurchAsync(churchId);
+    sel.innerHTML='<option value="">— Select department —</option>'+list.map(function(d){
+      return '<option value="'+esc(d.id)+'">'+(d.icon||"")+' '+esc(d.name||d.title||d.id)+'</option>';
+    }).join("");
+    if(!list.length) sel.innerHTML='<option value="">No departments available for this church</option>';
+  }catch(err){console.error("[loadDepartmentsForAddUser]",err);sel.innerHTML='<option value="">Could not load departments</option>';}
 };
 
 window.toggleChurchFields = function(role){
@@ -14937,7 +14928,11 @@ window.submitAddUser = async function(){
 
 /* ── Edit user modal ─────────────────────────────────────── */
 window.openEditUserModal = async function(uid){
-  if(!requireSuperAdmin()) return;
+  const actor = currentUser();
+  if(!actor || (actor.role !== "superAdmin" && actor.role !== "churchAdmin")){
+    toast("Access denied", "Only Super Admin and Church Admin can edit teacher profiles.", "error");
+    return;
+  }
 
   let userDoc = (window.__allSuperUsers || []).find(function(x){
     return String(x.id || x.docId || "") === String(uid) || String(x.uid || "") === String(uid);
@@ -14951,6 +14946,10 @@ window.openEditUserModal = async function(uid){
     }catch(fetchErr){console.warn("[openEditUserModal] recovery",fetchErr);}
   }
   if(!userDoc){toast("User not found","Could not find this user by document ID or UID. Refresh the user list and try again.","error");return;}
+  if(actor.role === "churchAdmin" && (userDoc.role !== "teacher" || !actor.churchId || userDoc.churchId !== actor.churchId)){
+    toast("Access denied", "You can edit teacher profiles belonging to your own church only.", "error");
+    return;
+  }
   const editDocumentId=String(userDoc.id||userDoc.docId||uid);
 
   let churches = [];
@@ -14967,8 +14966,8 @@ window.openEditUserModal = async function(uid){
   }).join("");
 
   const filteredDepts = userDoc.churchId
-    ? departments.filter(function(d){ return !d.churchId || d.churchId === userDoc.churchId || (Array.isArray(d.churchIds) && d.churchIds.includes(userDoc.churchId)); })
-    : departments;
+    ? departments.filter(function(d){ return window.sdaDepartmentVisibleInChurch ? window.sdaDepartmentVisibleInChurch(d, userDoc.churchId) : (d.churchId === userDoc.churchId || d.churchId === "__global__" || d.isGlobal === true); })
+    : departments.filter(function(d){ return d.churchId === "__global__" || d.isGlobal === true || d.createdByRole === "superAdmin"; });
 
   const deptOptions = filteredDepts.map(function(d){
     return '<option value="' + esc(d.id) + '"'
@@ -15063,6 +15062,18 @@ window.openEditUserModal = async function(uid){
     + '</div>';
 
   document.body.insertAdjacentHTML("beforeend", html);
+  if(actor.role === "churchAdmin"){
+    const form = document.getElementById("editUserForm");
+    if(form){
+      ["email","role","status","churchId"].forEach(function(name){
+        const field=form.querySelector('[name="'+name+'"]');
+        if(field){ field.disabled=true; field.closest(".form-group")?.setAttribute("style", "display:none"); }
+      });
+      const title=document.querySelector("#editUserModal .reg-card-modal-inner .form-group");
+      const heading=document.querySelector("#editUserModal .reg-card-modal-inner");
+      if(heading){ const subtitle=heading.querySelector("div[style*=background]"); if(subtitle){ const small=subtitle.querySelector("div:nth-child(2)"); if(small) small.textContent="Edit teacher profile in your church"; } }
+    }
+  }
   document.body.style.overflow = "hidden";
 };
 
@@ -15075,6 +15086,10 @@ window.closeEditUserModal = function(){
 window.submitEditUser = async function(uid){
   const form = document.getElementById("editUserForm");
   if(!form) return;
+  const actor = currentUser();
+  if(!actor || (actor.role !== "superAdmin" && actor.role !== "churchAdmin")){
+    toast("Access denied", "Only Super Admin and Church Admin can edit teacher profiles.", "error"); return;
+  }
 
   const newName     = form.name.value.trim();
   const newEmail    = form.email.value.trim().toLowerCase();
@@ -15099,19 +15114,31 @@ window.submitEditUser = async function(uid){
     const userRef = FB.db.collection("users").doc(String(uid));
     const existingUserSnap = await userRef.get();
     if(!existingUserSnap.exists) throw new Error("The user document was not found. Refresh the user list and reopen Edit.");
-    await userRef.update({
-      uid:          existingUserSnap.data().uid || String(uid),
-      name:         newName,
-      email:        newEmail,
-      role:         newRole,
-      status:       newStatus,
-      churchId:     newChurchId,
+    const existingData = existingUserSnap.data() || {};
+    if(actor.role === "churchAdmin" && (existingData.role !== "teacher" || !actor.churchId || existingData.churchId !== actor.churchId)){
+      throw new Error("You can edit teacher profiles belonging to your own church only.");
+    }
+    const updatePayload = actor.role === "churchAdmin" ? {
+      name: newName,
       departmentId: newDeptId,
-      phone:        newPhone,
-      gender:       newGender,
-      updatedAt:    firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy:    currentUser().user
-    });
+      phone: newPhone,
+      gender: newGender,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: actor.user || actor.email || ""
+    } : {
+      uid: existingData.uid || String(uid),
+      name: newName,
+      email: newEmail,
+      role: newRole,
+      status: newStatus,
+      churchId: newChurchId,
+      departmentId: newDeptId,
+      phone: newPhone,
+      gender: newGender,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: actor.user || actor.email || ""
+    };
+    await userRef.update(updatePayload);
     firestoreClearCache("users");
 
     toast("User updated", newName, "success");
@@ -33058,7 +33085,7 @@ async function loadAdminTeachers(){
     /* Filter by church for church admin */
     if(u.role === "churchAdmin"){
       teachers = teachers.filter(function(t){
-        return !t.churchId || t.churchId === u.churchId;
+        return !!u.churchId && t.churchId === u.churchId;
       });
     }
 
@@ -33249,7 +33276,7 @@ window.openAssignTeacherModal = async function(teacherEmail){
 
     /* Only ACTIVE departments */
     myDepts = myDepts.filter(function(d){
-      return !d.status || d.status === "ACTIVE";
+      return !d.status || d.status !== "REJECTED";
     });
 
     /* Only PUBLISHED courses */
@@ -33596,7 +33623,7 @@ window.loadAdminTeachers = async function(){
     /* Filter to church for church admin */
     if(u.role === "churchAdmin" && u.churchId){
       teachers = teachers.filter(function(t){
-        return !t.churchId || t.churchId === u.churchId;
+        return !!u.churchId && t.churchId === u.churchId;
       });
     }
 
@@ -62644,9 +62671,16 @@ console.log("✅ Multi-language helpers loaded");
   window.listTeacherCourses = window.getVisibleCoursesForTeacher;
   window.listChurchCourses = async function(churchId){
     const all=await loadCourses();
-    /* Empty scope is intentionally reserved for Super Admin platform-wide view. */
-    if(!churchId) return all;
-    return all.filter(c=>targetsChurch(c,churchId));
+    const actor=user();
+    /* Only Super Admin may request the platform-wide inventory. */
+    if(!churchId) return actor && actor.role==='superAdmin' ? all : [];
+    return all.filter(c=>{
+      if(!targetsChurch(c,churchId)) return false;
+      /* A Super Admin draft is private until published; do not expose it in a church workspace. */
+      if(actor && actor.role==='churchAdmin' && String(c.status||'DRAFT').toUpperCase()!=='PUBLISHED' &&
+        (c.createdByRole==='superAdmin' || c.churchId==='__global__' || c.allChurches===true)) return false;
+      return true;
+    });
   };
 
   /* Read/delete authorization. */
@@ -62839,8 +62873,94 @@ console.log("✅ Multi-language helpers loaded");
     return '<section class="page-header"><div class="container">'+breadcrumbs([{label:"Home",route:"home"},{label:"Dashboard",route:"portal-superAdmin"},{label:"Churches"}])+'<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap"><div><h1 style="margin:0">Church Management</h1><p style="margin:8px 0 0;opacity:.9">Review each church, its departments, and its assigned courses.</p></div><button class="btn btn-gold" onclick="openAddChurchModal()"><i class="fa-solid fa-plus"></i> Add Church</button></div></div></section><section class="section container" style="max-width:1250px"><div id="superChurchesHost"><div class="empty"><span class="loader"></span><h3>Loading churches…</h3></div></div></section>';
   };
   window.sdaShowChurchAssignments=function(id){const c=(window.__allChurches||[]).find(function(x){return String(x.id||x.churchId)===String(id);});const ds=(window.__allChurchDepartments||[]).filter(function(d){return String(d.churchId||"")===String(id)||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(id)!==-1);});const cs=(window.__allChurchCourses||[]).filter(function(x){return targets(x,id);});alert((c?c.name:"Church")+"\n\nDEPARTMENTS ("+ds.length+")\n"+(ds.length?ds.map(function(d){return "• "+(d.name||d.title||d.id);}).join("\n"):"No church-specific departments assigned.")+"\n\nCOURSES ("+cs.length+")\n"+(cs.length?cs.map(function(x){return "• "+(x.title||x.name||x.id)+" ["+(x.status||"no status")+"]";}).join("\n"):"No courses target this church."));};
-  document.addEventListener("change",async function(ev){const t=ev.target;if(!t||!t.closest||!t.closest("#editUserForm")||t.name!=="churchId")return;const sel=t.closest("#editUserForm").querySelector('[name="departmentId"]');if(!sel)return;try{const ds=await firestoreRead("departments",{forceRefresh:true}),old=sel.value,filtered=ds.filter(function(d){return !d.churchId||d.churchId===t.value||(Array.isArray(d.churchIds)&&d.churchIds.indexOf(t.value)!==-1);});sel.innerHTML='<option value="">— Select department —</option>'+filtered.map(function(d){return '<option value="'+esc(d.id)+'"'+(d.id===old?' selected':'')+'>'+esc(d.name||d.title||d.id)+'</option>';}).join("");}catch(e){console.warn("[department dropdown]",e);}});
+  window.sdaDepartmentVisibleInChurch = function(d, churchId){
+    if(!d || !churchId) return false;
+    const globalDept = d.churchId === "__global__" || d.isGlobal === true || d.allChurches === true || (!d.churchId && d.createdByRole === "superAdmin");
+    if(globalDept) return true;
+    if(d.churchId === churchId) return true;
+    return Array.isArray(d.churchIds) && d.churchIds.indexOf(churchId) !== -1;
+  };
+  window.getDepartmentsForChurchAsync = async function(churchId){
+    if(!churchId) return [];
+    const all = await firestoreRead("departments", {forceRefresh:true});
+    return all.filter(function(d){return window.sdaDepartmentVisibleInChurch(d, churchId);})
+      .filter(function(d){return !d.status || ["ACTIVE","PUBLISHED"].includes(d.status);})
+      .sort(function(a,b){const as=a.churchId===churchId?0:1,bs=b.churchId===churchId?0:1;return as-bs||String(a.name||a.title||"").localeCompare(String(b.name||b.title||""));});
+  };
+  document.addEventListener("change", async function(ev){
+    const t=ev.target; if(!t || !t.closest || !t.closest("#editUserForm") || t.name!=="churchId") return;
+    const form=t.closest("#editUserForm"), sel=form.querySelector('[name="departmentId"]'); if(!sel) return;
+    try{
+      const old=sel.value, ds=await window.getDepartmentsForChurchAsync(t.value);
+      sel.innerHTML='<option value="">— Select department —</option>'+ds.map(function(d){return '<option value="'+esc(d.id)+'"'+(d.id===old?' selected':'')+'>'+esc(d.name||d.title||d.id)+'</option>';}).join("");
+    }catch(e){console.warn("[department dropdown]",e);sel.innerHTML='<option value="">Could not load departments</option>';}
+  });
   console.log("SDA church consistency patch installed");
+})();
+</script>
+
+
+
+<!-- SDA TENANT VISIBILITY + TEACHER PROFILE EDIT PATCH -->
+<script>
+(function SDATenantTeacherProfilePatch(){
+  if(window.__sdaTenantTeacherProfilePatch) return;
+  window.__sdaTenantTeacherProfilePatch=true;
+  const norm=v=>String(v||"").trim().toLowerCase();
+  const arr=v=>Array.isArray(v)?v:(v?[v]:[]);
+  const current=()=>typeof currentUser==="function"?currentUser():null;
+
+  /* A department is global only when explicitly marked global or created as a global
+     Super Admin department. Unassigned church-admin departments are not global. */
+  window.sdaDepartmentVisibleInChurch=function(d, churchId){
+    if(!d || !churchId) return false;
+    const globalDept=d.churchId==="__global__" || d.isGlobal===true || d.allChurches===true ||
+      (!d.churchId && d.createdByRole==="superAdmin");
+    return globalDept || d.churchId===churchId || (Array.isArray(d.churchIds)&&d.churchIds.includes(churchId));
+  };
+  window.getDepartmentsForChurchAsync=async function(churchId){
+    if(!churchId) return [];
+    const all=await firestoreRead("departments",{forceRefresh:true});
+    return all.filter(d=>window.sdaDepartmentVisibleInChurch(d,churchId))
+      .filter(d=>!d.status || d.status!=="REJECTED")
+      .sort((a,b)=>(a.churchId===churchId?0:1)-(b.churchId===churchId?0:1)||String(a.name||a.title||"").localeCompare(String(b.name||b.title||"")));
+  };
+
+  /* Teacher assignment modal: show only this church's departments plus global departments. */
+  const originalAssign=window.openAssignTeacherModal;
+  if(typeof originalAssign==="function"){
+    window.openAssignTeacherModal=async function(teacherEmail){
+      const u=current();
+      if(!u || !["superAdmin","churchAdmin"].includes(u.role)) return;
+      const originalRead=window.firestoreRead;
+      /* Keep the existing modal intact; the existing handler is patched below through
+         a short-lived filtered department response only during this invocation. */
+      if(u.role!=="churchAdmin") return originalAssign.apply(this,arguments);
+      try{
+        const all=await originalRead("departments",{forceRefresh:true});
+        const filtered=all.filter(d=>window.sdaDepartmentVisibleInChurch(d,u.churchId));
+        const real=window.firestoreRead;
+        window.firestoreRead=async function(collection,opts){
+          if(collection==="departments") return filtered;
+          return real.apply(this,arguments);
+        };
+        try{return await originalAssign.apply(this,arguments);}
+        finally{window.firestoreRead=real;}
+      }catch(e){console.error("[teacher assignment departments]",e);return originalAssign.apply(this,arguments);}
+    };
+  }
+
+  /* Hide a Super Admin's unpublished global draft from Church Admin course lists and views. */
+  const originalCanView=window.sdaCourseCanView;
+  if(typeof originalCanView==="function"){
+    window.sdaCourseCanView=async function(c,u){
+      const actor=u||current();
+      if(actor && actor.role==="churchAdmin" && c && String(c.status||"DRAFT").toUpperCase()!=="PUBLISHED" &&
+        (c.createdByRole==="superAdmin" || c.churchId==="__global__" || c.allChurches===true)) return false;
+      return originalCanView.apply(this,arguments);
+    };
+  }
+  console.log("[SDA] Tenant department visibility and teacher profile edit patch ready");
 })();
 </script>
 
