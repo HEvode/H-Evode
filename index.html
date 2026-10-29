@@ -11,7 +11,8 @@
 
 <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
-<!-- Image resize module (loaded once) -->
+<script src="https://cdn.jsdelivr.net/npm/quill-resize-image@1.0.6/dist/quill-resize-image.min.js"></script>
+<!-- Image resize module -->
 <script src="https://cdn.jsdelivr.net/npm/quill-resize-image@1.0.6/dist/quill-resize-image.min.js"></script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -51,21 +52,7 @@ firebase.initializeApp(firebaseConfig);
 window.__firestoreCache = {};
 
 async function firestoreRead(collectionName, options){
-  options = Object.assign({}, options || {});
-  /* Firestore rules require Church Admin application reads to be scoped
-     to their own church. Apply the scope before issuing the query. */
-  const sessionUser = (typeof window.currentUser === "function") ? window.currentUser() : null;
-  if(!options.where && sessionUser){
-    if(collectionName === "applications" && sessionUser.role === "churchAdmin" && sessionUser.churchId){
-      options.where = ["churchId", "==", sessionUser.churchId];
-    }else if(collectionName === "users"){
-      if((sessionUser.role === "churchAdmin" || sessionUser.role === "teacher") && sessionUser.churchId){
-        options.where = ["churchId", "==", sessionUser.churchId];
-      }else if(sessionUser.role === "student" || !sessionUser.role){
-        options.where = ["uid", "==", sessionUser.uid];
-      }
-    }
-  }
+  options = options || {};
   const cacheKey = collectionName + ":" + (options.where || "all");
 
   /* Return cached value if fresh (unless forceRefresh) */
@@ -100,19 +87,15 @@ async function firestoreRead(collectionName, options){
 
     /* If Firestore returns empty, fall back to DEMO data */
     if(snap.empty && !options.allowEmpty){
-      window.__firestoreCache[cacheKey] = [];
-      if(collectionName === "applications") window.__firestoreCache["applications:all"] = [];
-      return [];
-    }
+  window.__firestoreCache[cacheKey] = [];
+  return [];
+}
 
     const list = snap.docs.map(function(d){
       return Object.assign({ id: d.id }, d.data());
     });
 
     window.__firestoreCache[cacheKey] = list;
-    /* Legacy renderers read applications:all; it now contains only the
-       query permitted for the current role, never another church's queue. */
-    if(collectionName === "applications") window.__firestoreCache["applications:all"] = list;
     return list;
 
   }catch(err){
@@ -9465,10 +9448,6 @@ function renderStatusTab(){
         + 'autocomplete="off" style="text-transform:uppercase;font-family:monospace;'
         + 'font-weight:700;letter-spacing:.05em">'
     + '</div>'
-    + '<div class="form-group">'
-      + '<label>Email used for registration</label>'
-      + '<input id="regStatusEmail" type="email" autocomplete="email" placeholder="yourname@gmail.com">'
-    + '</div>'
 
     + '<button class="btn btn-primary" style="width:100%" onclick="regCheckStatus()">'
       + '<i class="fa-solid fa-magnifying-glass"></i> Check Status</button>'
@@ -9489,19 +9468,8 @@ async function regCheckStatus(){
   if(!input || !host) return;
 
   const code = (input.value || "").trim().toUpperCase();
-  const emailInput = document.getElementById("regStatusEmail");
-  const email = (emailInput && emailInput.value || "").trim().toLowerCase();
-  const signedInEmail = FB.auth && FB.auth.currentUser && (FB.auth.currentUser.email || "").toLowerCase();
-  if(!code || !email){
-    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Enter both your registration number and email.</h3></div>';
-    return;
-  }
-  if(!FB.auth || !FB.auth.currentUser){
-    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Please sign in first.</h3><p>For privacy, registration status is available only to the account that submitted the application.</p><button class="btn btn-primary" onclick="go(&quot;login&quot;)">Sign In</button></div>';
-    return;
-  }
-  if(signedInEmail !== email){
-    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Email does not match the signed-in account.</h3></div>';
+  if(!code){
+    host.innerHTML = '<div class="empty" style="padding:24px"><h3>Please enter a number.</h3></div>';
     return;
   }
 
@@ -9514,7 +9482,6 @@ async function regCheckStatus(){
   try{
     const snap = await FB.db.collection("applications")
       .where("regNumber", "==", code)
-      .where("email", "==", email)
       .limit(1)
       .get();
 
@@ -10583,17 +10550,16 @@ async function submitLogin(form){
     const data = userDoc.data();
 
     if(data.status === "PENDING_APPROVAL"){
-      /* Keep the user signed in only to view verification/approval status.
-         Firestore rules and route guards still deny protected learning actions. */
+      await FB.auth.signOut();
       if(err){
-        err.textContent = "Your account is awaiting approval. You can check its status here; learning features remain locked until approval and email verification are complete.";
+        err.textContent = "Your account is pending approval. "
+          + (data.approverRole === "superAdmin"
+              ? "A Super Admin will review it soon."
+              : "Your Church Admin will review it soon.");
         err.style.display = "block";
       }
       btn.disabled = false;
       btn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Sign In';
-      setTimeout(function(){
-        go(cred.user.emailVerified ? "registration-pending" : "verify-email");
-      }, 250);
       return;
     }
 
@@ -10623,65 +10589,6 @@ async function submitLogin(form){
 }
 window.submitLogin = submitLogin;
 
-
-/* ═══════════════════════════════════════════════════════════
-   PENDING REGISTRATION STATUS — signed-in, restricted account
-   ═══════════════════════════════════════════════════════════ */
-ROUTES["registration-pending"] = function(){
-  const fbUser = FB && FB.auth && FB.auth.currentUser;
-  if(!fbUser){
-    setTimeout(function(){ go("login"); }, 50);
-    return '<section class="section container"><div class="empty"><h3>Please sign in to check your account status.</h3></div></section>';
-  }
-  setTimeout(async function(){
-    const host = document.getElementById("registrationPendingHost");
-    if(!host) return;
-    try{
-      const snap = await FB.db.collection("users").doc(fbUser.uid).get();
-      if(!snap.exists){
-        host.innerHTML = '<div class="empty"><h3>Account record not found</h3><p>Please contact support.</p></div>';
-        return;
-      }
-      const data = snap.data();
-      await refreshSession();
-      if(data.status === "ACTIVE"){
-        if(!fbUser.emailVerified && VERIFICATION_ENABLED){ go("verify-email"); return; }
-        host.innerHTML = '<div class="empty"><h3>Your account is approved</h3><p>You can now access your learning dashboard.</p><button class="btn btn-primary" onclick="openApprovedPortal()">Open Dashboard</button></div>';
-        return;
-      }
-      if(data.status === "REJECTED" || data.status === "DISABLED" || data.status === "SUSPENDED"){
-        host.innerHTML = '<div class="empty"><h3>Registration not approved</h3><p>' + esc(data.rejectReason || "Please contact your Church Admin for more information.") + '</p><button class="btn btn-outline" onclick="logout()">Sign out</button></div>';
-        return;
-      }
-      const emailVerified = !!fbUser.emailVerified;
-      host.innerHTML = '<div class="reg-block" style="max-width:650px;margin:0 auto;text-align:center;padding:30px">'
-        + '<div class="e-feature-icon gold" style="margin:0 auto 16px;width:70px;height:70px;font-size:1.8rem"><i class="fa-solid fa-hourglass-half"></i></div>'
-        + '<h2 style="color:var(--navy)">Registration Pending Approval</h2>'
-        + '<p class="muted">Your account is saved. Your Church Admin must approve it before learning features become available.</p>'
-        + '<div style="text-align:left;background:#F7FAFF;border-radius:12px;padding:16px;margin:18px 0">'
-        + '<p><strong>Name:</strong> ' + esc(data.name || "—") + '</p>'
-        + '<p><strong>Email:</strong> ' + esc(data.email || fbUser.email || "—") + '</p>'
-        + '<p><strong>Church:</strong> ' + esc(data.churchName || data.churchId || "—") + '</p>'
-        + '<p><strong>Email verification:</strong> ' + (emailVerified ? '<span style="color:#137547">Verified</span>' : '<span style="color:#9A6700">Not verified yet</span>') + '</p>'
-        + '<p><strong>Church approval:</strong> <span style="color:#9A6700">Pending</span></p>'
-        + '</div>'
-        + (!emailVerified && VERIFICATION_ENABLED ? '<button class="btn btn-outline" onclick="go(&quot;verify-email&quot;)">Verify Email</button> ' : '')
-        + '<button class="btn btn-primary" onclick="refreshRegistrationStatus()"><i class="fa-solid fa-rotate"></i> Refresh Status</button> '
-        + '<button class="btn btn-outline" onclick="logout()">Sign Out</button>'
-        + '</div>';
-    }catch(err){
-      console.error("[registration-pending]", err);
-      host.innerHTML = '<div class="empty"><h3>Could not check status</h3><p>' + esc(err.message || "Please try again.") + '</p><button class="btn btn-primary" onclick="refreshRegistrationStatus()">Retry</button></div>';
-    }
-  }, 80);
-  return '<section class="page-header"><div class="container"><h1>Registration Status</h1><p>Check your email verification and church approval.</p></div></section><section class="section container"><div id="registrationPendingHost"><div class="empty"><span class="loader"></span><p>Checking status…</p></div></div></section>';
-};
-window.refreshRegistrationStatus = function(){ go("registration-pending"); };
-window.openApprovedPortal = function(){
-  const u = currentUser();
-  if(!u || !u.role) { go("login"); return; }
-  go("portal-" + u.role);
-};
 
 /* ═══════════════════════════════════════════════════════════
    4. REGISTER ROUTE  ★ v5 — Church picker for students
@@ -11389,10 +11296,6 @@ async function submitRegisterAccount(form){
     }catch(verificationError){
       console.error("[registration verification email]", verificationError);
     }
-
-    /* Keep only the pending email (not credentials) so the signed-out
-       verification page can tell the user which inbox to check. */
-    try{ localStorage.setItem("sda_pending_verification_email", email); }catch(e){}
 
     try{ await FB.auth.signOut(); }catch(e){}
     sessionStorage.removeItem("sda_session");
@@ -12385,26 +12288,17 @@ async function approveApplication(appId){
   if(!confirm(msg)) return;
 
   const me = currentUser();
-  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
-    toast("Access denied", "Only authorized administrators can approve applications.", "error");
-    return;
-  }
-  if(me.role === "churchAdmin" && (!me.churchId || app.churchId !== me.churchId)){
-    toast("Access denied", "You can only approve applications for your own church.", "error");
-    return;
-  }
 
   try{
     await FB.db.collection("applications").doc(app.id).update({
-      status: "APPROVED",
+      status:     "APPROVED",
       approvedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      approvedBy: me.uid || me.user || me.email || "admin"
+      approvedBy: me ? me.user : "admin"
     });
     firestoreClearCache("applications");
   }catch(err){
     console.error("[approveApplication]", err);
-    toast("Approval failed", err.message || "Missing or insufficient permissions.", "error");
-    return; /* Do not create an account if the approval write failed. */
+    toast("Warning", "Firestore update failed — retrying.", "warning");
   }
 
   const result = await createStudentAccount(app);
@@ -12543,27 +12437,17 @@ async function rejectApplication(appId){
   if(reason === null) return;
 
   const me = currentUser();
-  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
-    toast("Access denied", "Only authorized administrators can reject applications.", "error");
-    return;
-  }
-  if(me.role === "churchAdmin" && (!me.churchId || app.churchId !== me.churchId)){
-    toast("Access denied", "You can only reject applications for your own church.", "error");
-    return;
-  }
 
   try{
     await FB.db.collection("applications").doc(app.id).update({
-      status: "REJECTED",
-      rejectedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      status:       "REJECTED",
+      rejectedAt:   firebase.firestore.FieldValue.serverTimestamp(),
       rejectReason: reason || "",
-      rejectedBy: me.uid || me.user || me.email || "admin"
+      rejectedBy:   me ? me.user : "admin"
     });
     firestoreClearCache("applications");
   }catch(err){
     console.error("[rejectApplication]", err);
-    toast("Rejection failed", err.message || "Missing or insufficient permissions.", "error");
-    return;
   }
 
   try{
@@ -15975,19 +15859,13 @@ ROUTES["user-approvals"] = function(){
         return x.status === "PENDING_APPROVAL";
       });
 
-      /* Approval queue is strictly scoped by approver and church.
-         A Church Admin must never see another church's student queue. */
       const filtered = u.role === "churchAdmin"
         ? pendingUsers.filter(function(x){
-            return !!u.churchId
-                && x.churchId === u.churchId
-                && x.approverRole !== "superAdmin"
-                && (x.role === "student" || x.role === "teacher");
+            return !x.churchId
+                || x.churchId === u.churchId
+                || x.approverRole === "churchAdmin";
           })
-        : pendingUsers.filter(function(x){
-            /* Super Admin handles platform-level registrations only. */
-            return x.role === "churchAdmin" && x.approverRole === "superAdmin";
-          });
+        : pendingUsers;
 
       if(!filtered.length){
         host.innerHTML =
@@ -16085,76 +15963,38 @@ ROUTES["user-approvals"] = function(){
 };
 
 window.approvePendingUser = async function(uid){
-  const me = currentUser();
-  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
-    toast("Access denied", "Only authorized administrators can approve users.", "error");
-    return;
-  }
-  if(!confirm("Approve this user? Their account will become active, but email verification may still be required.")) return;
+  if(!confirm("Approve this user?\n\nThey will be able to sign in immediately.")) return;
 
   try{
-    const ref = FB.db.collection("users").doc(uid);
-    const snap = await ref.get();
-    if(!snap.exists) throw new Error("User record not found.");
-    const target = snap.data();
-    if(me.role === "churchAdmin" && (!me.churchId || target.churchId !== me.churchId || !["student","teacher"].includes(target.role))){
-      throw new Error("You can only approve students or teachers assigned to your own church.");
-    }
-    if(me.role === "superAdmin" && target.role !== "churchAdmin"){
-      throw new Error("Super Admin approval is reserved for platform-level accounts.");
-    }
-    if(target.status !== "PENDING_APPROVAL") throw new Error("This account is no longer pending approval.");
-
-    await ref.update({
-      status: "ACTIVE",
+    await FB.db.collection("users").doc(uid).update({
+      status:     "ACTIVE",
       approvedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      approvedBy: me.uid || me.user || me.email || "admin",
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      approvedBy: currentUser().user
     });
     firestoreClearCache("users");
-    toast("User approved", "Account activated. Email verification is still checked separately.", "success");
+    toast("User approved", "They can now sign in.", "success");
     go("user-approvals");
   }catch(err){
-    console.error("[approvePendingUser]", err);
-    toast("Approval failed", err.message || "Missing or insufficient permissions.", "error");
+    toast("Failed", err.message, "error");
   }
 };
 
 window.rejectPendingUser = async function(uid){
-  const me = currentUser();
-  if(!me || (me.role !== "churchAdmin" && me.role !== "superAdmin")){
-    toast("Access denied", "Only authorized administrators can reject users.", "error");
-    return;
-  }
   const reason = prompt("Reject this user? Enter a reason (optional):", "");
   if(reason === null) return;
 
   try{
-    const ref = FB.db.collection("users").doc(uid);
-    const snap = await ref.get();
-    if(!snap.exists) throw new Error("User record not found.");
-    const target = snap.data();
-    if(me.role === "churchAdmin" && (!me.churchId || target.churchId !== me.churchId || !["student","teacher"].includes(target.role))){
-      throw new Error("You can only reject students or teachers assigned to your own church.");
-    }
-    if(me.role === "superAdmin" && target.role !== "churchAdmin"){
-      throw new Error("Super Admin decisions here are reserved for platform-level accounts.");
-    }
-    if(target.status !== "PENDING_APPROVAL") throw new Error("This account is no longer pending approval.");
-
-    await ref.update({
-      status: "REJECTED",
-      rejectedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      rejectedBy: me.uid || me.user || me.email || "admin",
-      rejectReason: reason || "",
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    await FB.db.collection("users").doc(uid).update({
+      status:       "REJECTED",
+      rejectedAt:   firebase.firestore.FieldValue.serverTimestamp(),
+      rejectedBy:   currentUser().user,
+      rejectReason: reason || ""
     });
     firestoreClearCache("users");
     toast("User rejected", "The user was not approved.", "info");
     go("user-approvals");
   }catch(err){
-    console.error("[rejectPendingUser]", err);
-    toast("Rejection failed", err.message || "Missing or insufficient permissions.", "error");
+    toast("Failed", err.message, "error");
   }
 };
 
@@ -31790,7 +31630,19 @@ window.clearRecentAccounts = clearRecentAccounts;
       + '<i class="fa-solid fa-xmark"></i>'
     + '</button>'
   + '</div>';
- }).join("");
+}).join("");
+          + '<div class="ra-avatar">'
+            + (a.photoURL
+                ? '<img src="' + esc(a.photoURL) + '" alt="">'
+                : (a.name || a.email).slice(0,2).toUpperCase())
+          + '</div>'
+          + '<div class="ra-body">'
+            + '<div class="ra-name">' + esc(a.name) + '</div>'
+            + '<div class="ra-email">' + esc(a.email) + '</div>'
+          + '</div>'
+          + '<i class="fa-solid fa-arrow-right ra-arrow"></i>'
+        + '</button>';
+      }).join("");
 
       const section = '<div class="recent-accounts-block" '
         + 'style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border)">'
@@ -32270,25 +32122,15 @@ async function getVisibleCoursesForTeacher(){
 
     try{
       const snap = await FB.db.collection("teacherAssignments")
-        .where("teacherEmail", "==", u.user.toLowerCase()).get();
+        .where("teacherEmail", "==", u.user.toLowerCase())
+        .limit(1).get();
       if(snap.empty) return own;
 
-      const courseIds = [];
-      const deptIds = [];
-      snap.docs.forEach(function(doc){
-        const a = doc.data() || {};
-        (Array.isArray(a.courseIds) ? a.courseIds : []).forEach(function(id){
-          if(id && courseIds.indexOf(id) === -1) courseIds.push(id);
-        });
-        (Array.isArray(a.departmentIds) ? a.departmentIds : []).forEach(function(id){
-          if(id && deptIds.indexOf(id) === -1) deptIds.push(id);
-        });
-        if(a.courseId && courseIds.indexOf(a.courseId) === -1) courseIds.push(a.courseId);
-        if(a.departmentId && deptIds.indexOf(a.departmentId) === -1) deptIds.push(a.departmentId);
-      });
+      const a = snap.docs[0].data();
+      const courseIds = a.courseIds || [];
+      const deptIds   = a.departmentIds || [];
 
       const assigned = all.filter(function(c){
-        if(u.churchId && c.churchId && c.churchId !== u.churchId) return false;
         if(courseIds.indexOf(c.id) !== -1) return true;
         if(c.departmentId && deptIds.indexOf(c.departmentId) !== -1) return true;
         return false;
@@ -47471,7 +47313,7 @@ console.log("✅ Project decision override + admin view loaded");
                       + 'color:var(--soft);font-size:.88rem">'
                       + '<span class="loader" style="border-top-color:var(--primary);'
                         + 'width:14px;height:14px"></span> '
-                      + 'Loading departments…</div>')))
+                      + 'Loading departments…</div>'))
       + '</div>'
 
       /* ── COURSE SELECTOR (unchanged) ── */
@@ -54252,8 +54094,20 @@ body.mobile-menu-open {
   /* ═══════════════════════════════════════════════════════════
      4. OVERRIDE submitCertificatePreparation — with duplicate check
      ═══════════════════════════════════════════════════════════ */
-  /* Removed an incomplete duplicate-submit wrapper that caused a syntax error.
-     The certificate modal and save flow below remain the canonical handlers. */
+  function patchSubmitCert(){
+    if(typeof window.submitCertificatePreparation !== "function"){
+      return setTimeout(patchSubmitCert, 100);
+    }
+    if(window.__submitCertPatched) return;
+    window.__submitCertPatched = true;
+
+    const _orig = window.submitCertificatePreparation;
+
+    
+    };
+
+  }
+  patchSubmitCert();
 
   /* ═══════════════════════════════════════════════════════════
      5. Full re-implementation of prepare modal
@@ -59961,13 +59815,8 @@ body.mobile-menu-open {
           verifiedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       }catch(e){}
-      try{
-        if((localStorage.getItem("sda_pending_verification_email") || "").toLowerCase() === (fbUser.email || "").toLowerCase()){
-          localStorage.removeItem("sda_pending_verification_email");
-        }
-      }catch(e){}
 
-      toast("✅ Email verified!", "Your email is verified. Church approval may still be required before learning features are available.", "success");
+      toast("✅ Email verified!", "Your account is now fully active.", "success");
       return true;
     }
 
@@ -60006,12 +59855,10 @@ body.mobile-menu-open {
                 + '<h2 style="color:var(--navy);margin-bottom:8px">'
                   + 'Email Verified ✓</h2>'
                 + '<p class="muted" style="margin-bottom:24px">'
-                  + ((currentUser() && currentUser().status === "PENDING_APPROVAL")
-                      ? 'Your email is verified. Your church must still approve your account before learning access is enabled.'
-                      : 'Your email address is verified. You can now continue to your account.') + '</p>'
-                + '<button class="btn btn-primary" onclick="continueAfterVerification()">'
-                  + '<i class="fa-solid fa-arrow-right"></i> '
-                  + ((currentUser() && currentUser().status === "PENDING_APPROVAL") ? 'Check Registration Status' : 'Go to Dashboard')
+                  + 'Your email address is verified. You can now use your account.</p>'
+                + '<button class="btn btn-primary" '
+                  + 'onclick="go(\'portal-' + (currentUser() ? currentUser().role : "student") + '\')">'
+                  + '<i class="fa-solid fa-arrow-right"></i> Go to Dashboard'
                 + '</button>'
               + '</div>'
 
@@ -60035,7 +59882,7 @@ body.mobile-menu-open {
                   + 'border-radius:12px;padding:14px 20px;margin-bottom:20px;'
                   + 'font-family:monospace;font-weight:700;'
                   + 'color:var(--primary);word-break:break-all">'
-                  + (fbUser ? esc(fbUser.email) : esc(localStorage.getItem("sda_pending_verification_email") || "Sign in to continue"))
+                  + (fbUser ? esc(fbUser.email) : "—")
                 + '</div>'
 
                 + '<p class="muted" style="font-size:.85rem;line-height:1.6;'
@@ -60079,21 +59926,9 @@ body.mobile-menu-open {
      BUTTON — Check verification status
      ═══════════════════════════════════════════════════════════ */
 
-  window.continueAfterVerification = function(){
-    const u = currentUser();
-    if(u && u.status === "PENDING_APPROVAL") go("registration-pending");
-    else if(u && u.role) go("portal-" + u.role);
-    else go("login");
-  };
-
   window.checkVerificationStatus = async function(){
     const btn = document.getElementById("checkVerifyBtn");
     if(!btn) return;
-    if(!FB.auth.currentUser){
-      toast("Sign in to check", "After clicking the link in your inbox, sign in with the same account. We will then check the verification status.", "info");
-      go("login");
-      return;
-    }
 
     const original = btn.innerHTML;
     btn.disabled = true;
@@ -60105,9 +59940,7 @@ body.mobile-menu-open {
       if(verified){
         setTimeout(function(){
           const u = currentUser();
-          if(u && u.status === "PENDING_APPROVAL"){
-            go("registration-pending");
-          }else if(u && u.role){
+          if(u && u.role){
             go("portal-" + u.role);
           }else{
             go("home");
@@ -60136,11 +59969,6 @@ body.mobile-menu-open {
   window.resendVerificationLink = async function(){
     const btn = document.getElementById("resendVerifyBtn");
     if(!btn) return;
-    if(!FB.auth.currentUser){
-      toast("Sign in to resend", "For account security, sign in with the account that needs verification, then use Resend verification link.", "info");
-      go("login");
-      return;
-    }
 
     const original = btn.innerHTML;
     btn.disabled = true;
@@ -62034,402 +61862,6 @@ console.log("✅ Multi-language helpers loaded");
     try{const ref=dbA().collection('academicRecords').doc(id), snap=await ref.get(); if(!snap.exists)return alert('Record no longer exists.'); if(u.role==='churchAdmin'&&snap.data().churchId!==churchA(u))return alert('You cannot delete another church’s record.'); await ref.delete(); await loadAcademicRecordsA('Student academic record permanently deleted.');}
     catch(e){alert('Could not delete record: '+e.message);}
   };
-})();
-</script>
-
-
-<!-- ═══════════════════════════════════════════════════════════
-     ROLE NAVIGATION POLICY — activity work belongs to local teams
-     Super Admin manages platform/churches/roles; Teachers and Church
-     Admins manage day-to-day learning activities within their church.
-     ═══════════════════════════════════════════════════════════ -->
-<script>
-(function SDAFinalRoleNavigationPolicy(){
-  const SUPER_ADMIN_ACTIVITY_ROUTES = new Set([
-    "teacher-gradebook", "teacher-f2f", "teacher-f2f-detail",
-    "teacher-projects", "teacher-final-projects",
-    "teacher-attendance", "teacher-attendance-session",
-    "attendance-report", "teacher-attendance-report",
-    "final-projects", "face-to-face-marks", "gradebook"
-  ]);
-  const ACTIVITY_LABEL = /^(final projects|grade book|gradebook|face-to-face marks|attendance report|attendance|teacher projects)$/i;
-
-  function applyPolicy(){
-    if(typeof DASH_MENUS === "undefined") return false;
-    if(Array.isArray(DASH_MENUS.superAdmin)){
-      DASH_MENUS.superAdmin = DASH_MENUS.superAdmin.filter(function(item){
-        const route = String(item && item.route || "").toLowerCase();
-        const label = String(item && item.label || "").trim();
-        return !SUPER_ADMIN_ACTIVITY_ROUTES.has(route) && !ACTIVITY_LABEL.test(label);
-      });
-    }
-    return true;
-  }
-  applyPolicy();
-
-  /* Guard these screens as well as hiding their links. This is a UI-level
-     safeguard only; matching Firestore Security Rules are still required. */
-  function wrapRoutes(){
-    if(typeof ROUTES === "undefined") return false;
-    SUPER_ADMIN_ACTIVITY_ROUTES.forEach(function(route){
-      const original = ROUTES[route];
-      if(typeof original !== "function" || original.__sdaRoleGuarded) return;
-      const guarded = function(){
-        const u = typeof currentUser === "function" ? currentUser() : null;
-        if(u && u.role === "superAdmin"){
-          if(typeof toast === "function") toast("Local activity access", "Final projects, grades, face-to-face marks and attendance are managed by Teachers and Church Administrators. Use platform administration to manage access.", "info");
-          if(typeof go === "function") go("portal-superAdmin");
-          return "";
-        }
-        return original.apply(this, arguments);
-      };
-      guarded.__sdaRoleGuarded = true;
-      ROUTES[route] = guarded;
-    });
-    return true;
-  }
-  wrapRoutes();
-  /* Some route/menu declarations are installed asynchronously by older code. */
-  let tries = 0;
-  const timer = setInterval(function(){
-    applyPolicy(); wrapRoutes(); tries++;
-    if(tries >= 30) clearInterval(timer);
-  }, 250);
-})();
-</script>
-<!-- SDA COURSE VISIBILITY + ASSIGNMENT PATCH -->
-<script>
-(function SDACourseVisibilityAndAssignments(){
-  if (window.__sdaCoursePolicyV2) return;
-  window.__sdaCoursePolicyV2 = true;
-  const $ = id => document.getElementById(id);
-  const norm = v => String(v || '').trim().toLowerCase();
-  const arr = v => Array.isArray(v) ? v : (v ? [v] : []);
-  const safe = v => typeof esc === 'function' ? esc(String(v == null ? '' : v)) : String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const user = () => typeof currentUser === 'function' ? currentUser() : null;
-  const courseTargets = c => arr(c.targetChurchIds).length ? arr(c.targetChurchIds) : (c.churchId && c.churchId !== '__global__' ? [c.churchId] : []);
-  const isGlobal = c => c.allChurches === true || c.churchId === '__global__' || (!c.churchId && !arr(c.targetChurchIds).length);
-  const targetsChurch = (c, churchId) => isGlobal(c) || (!!churchId && courseTargets(c).includes(churchId));
-
-  async function loadCourses(){ return await firestoreRead('courses', {forceRefresh:true}); }
-  async function getDept(id){
-    if(!id) return null;
-    try { return await FB.db.collection('departments').doc(id).get().then(s => s.exists ? Object.assign({id:s.id},s.data()) : null); }
-    catch(e){ return null; }
-  }
-  async function canViewCourse(c, u){
-    if(!u || !c) return false;
-    if(u.role === 'superAdmin') return true;
-    if(u.role === 'churchAdmin') return !!u.churchId && targetsChurch(c,u.churchId);
-    if(u.role === 'student') return c.status === 'PUBLISHED' && targetsChurch(c,u.churchId || '');
-    if(u.role === 'teacher'){
-      const email = norm(u.user || u.email);
-      if(!targetsChurch(c,u.churchId)) return false;
-      if(norm(c.createdBy) === email || norm(c.teacherEmail) === email || arr(c.teacherEmails).some(x => norm(x) === email)) return true;
-      try{
-        const snap = await FB.db.collection('teacherAssignments').where('teacherEmail','==',email).get();
-        return snap.docs.some(d => {
-          const a=d.data()||{};
-          return arr(a.courseIds).includes(c.id) || arr(a.departmentIds).includes(c.departmentId);
-        });
-      }catch(e){ return false; }
-    }
-    return false;
-  }
-  async function canManageCourse(c,u){
-    if(!u || !c) return false;
-    if(u.role === 'superAdmin') return true;
-    if(u.role === 'churchAdmin') return !!u.churchId && targetsChurch(c,u.churchId);
-    if(u.role === 'teacher'){
-      const email=norm(u.user || u.email);
-      return !!email && (norm(c.createdBy) === email || norm(c.teacherEmail) === email || arr(c.teacherEmails).some(x=>norm(x)===email) && norm(c.createdBy)===email);
-    }
-    return false;
-  }
-  window.sdaCourseCanView = canViewCourse;
-  window.sdaCourseCanManage = canManageCourse;
-
-  /* Rebuild the assignment area on the existing course form without losing media fields. */
-  const oldRender = window.renderCourseForm;
-  if(typeof oldRender === 'function'){
-    window.renderCourseForm = function(course){
-      const u=user();
-      let html=oldRender(course);
-      if(!u || !html) return html;
-      const existing=course||{};
-      const superFields = u.role === 'superAdmin'
-        ? '<div class="form-group" style="margin-bottom:16px"><label><input type="checkbox" id="courseAllChurches" '+((existing.allChurches || existing.churchId==='__global__')?'checked':'')+'> Publish to all churches</label><small class="muted" style="display:block">When enabled, this course is available across all churches, subject to course status and department permissions.</small></div><div class="form-group" id="courseChurchPickerWrap"><label>Target churches (select multiple)</label><select id="courseTargetChurches" multiple size="5" style="min-height:120px;width:100%"></select><small class="muted">Use Ctrl (Windows) or Command (Mac) to select multiple churches.</small></div>'
-        : '';
-      const teacherMulti = (u.role === 'superAdmin' || u.role === 'churchAdmin')
-        ? '<div class="form-group" style="margin-top:12px"><label>Assigned teachers (select multiple)</label><select id="courseTeachersMulti" multiple size="5" style="width:100%;min-height:120px"></select><small class="muted">Teachers are filtered by the selected department and target church. Remove a teacher by deselecting them.</small></div>'
-        : '';
-      html=html.replace(/<div class="reg-block" style="margin-top:20px">\s*<div class="reg-block-title">\s*<i class="fa-solid fa-sitemap"><\/i> Assignment<\/div>/, function(m){ return m+superFields; });
-      if(teacherMulti){
-        html=html.replace(/<div class="form-group">\s*<label>Assigned Teacher<\/label>[\s\S]*?<\/select>\s*<\/div>/, function(m){return '<div style="display:none" aria-hidden="true">'+m+'</div>'+teacherMulti;});
-      }
-      const editOwner = existing.createdBy || existing.teacherEmail || '';
-      if(course && editOwner){
-        html=html.replace('<div class="reg-block-title">\n          <i class="fa-solid fa-circle-info"></i> Basic Info</div>', '<div class="reg-block-title">\n          <i class="fa-solid fa-circle-info"></i> Basic Info</div><p class="muted" style="margin:8px 0">Created by: <strong>'+safe(existing.createdByName || editOwner)+'</strong> · '+safe(existing.createdByRole || 'account')+'</p>');
-      }
-      setTimeout(async function(){
-        try{
-          const allChurches = await firestoreRead('churches',{forceRefresh:true}).catch(()=>[]);
-          const churchSel=$('courseTargetChurches');
-          if(churchSel){
-            churchSel.innerHTML=allChurches.map(ch=>'<option value="'+safe(ch.id)+'" '+((arr(existing.targetChurchIds).includes(ch.id) || (!arr(existing.targetChurchIds).length && existing.churchId===ch.id))?'selected':'')+'>'+safe(ch.name || ch.churchName || ch.id)+'</option>').join('');
-          }
-          const deptSel=$('courseDepartment');
-          const teacherSel=$('courseTeachersMulti');
-          const oldTeacher=$('courseTeacher');
-          const allUsers=await firestoreRead('users',{forceRefresh:true}).catch(()=>[]);
-          const selectedEmails=arr(existing.teacherEmails).length?arr(existing.teacherEmails):(existing.teacherEmail?[existing.teacherEmail]:[]);
-          function refillTeachers(){
-            if(!teacherSel) return;
-            const depId=deptSel ? deptSel.value : existing.departmentId;
-            const selectedChurches=churchSel ? Array.from(churchSel.selectedOptions).map(o=>o.value) : (u.churchId?[u.churchId]:[]);
-            const isAll=$('courseAllChurches') && $('courseAllChurches').checked;
-            const candidates=allUsers.filter(t=>{
-              if(t.role!=='teacher' || t.status==='REJECTED' || t.status==='DISABLED') return false;
-              const churchOk = u.role==='superAdmin' ? (isAll || !selectedChurches.length || !t.churchId || selectedChurches.includes(t.churchId)) : t.churchId===u.churchId;
-              const teacherDeptIds=arr(t.departmentIds).concat(t.departmentId?[t.departmentId]:[]);
-              const deptOk=!depId || teacherDeptIds.length===0 || teacherDeptIds.includes(depId);
-              return churchOk && deptOk;
-            });
-            const keep=new Set(Array.from(teacherSel.selectedOptions).map(o=>o.value));
-            selectedEmails.forEach(e=>keep.add(e));
-            teacherSel.innerHTML=candidates.map(t=>{
-              const email=norm(t.email || t.user);
-              return '<option value="'+safe(email)+'" '+(keep.has(email)?'selected':'')+'>'+safe(t.name || email)+' ('+safe(email)+')</option>';
-            }).join('');
-          }
-          if(deptSel){
-            const deps=await firestoreRead('departments',{forceRefresh:true}).catch(()=>[]);
-            const eligible=deps.filter(d=>u.role==='superAdmin' || !d.churchId || d.churchId===u.churchId || (u.role==='teacher' && d.id===existing.departmentId));
-            deptSel.innerHTML='<option value="">— Select department —</option>'+eligible.map(d=>'<option value="'+safe(d.id)+'" '+(existing.departmentId===d.id?'selected':'')+'>'+safe(d.name || d.title || d.id)+'</option>').join('');
-            deptSel.addEventListener('change',refillTeachers);
-          }
-          if(teacherSel) refillTeachers();
-          if(churchSel) churchSel.addEventListener('change',refillTeachers);
-          const allBox=$('courseAllChurches');
-          if(allBox){
-            const toggle=()=>{if($('courseChurchPickerWrap')) $('courseChurchPickerWrap').style.display=allBox.checked?'none':'';refillTeachers();};
-            allBox.addEventListener('change',toggle);toggle();
-          }
-          if(oldTeacher && teacherSel && selectedEmails.length===0 && oldTeacher.value) {
-            Array.from(teacherSel.options).forEach(o=>{if(o.value===norm(oldTeacher.value))o.selected=true;});
-          }
-        }catch(e){console.warn('[course assignment controls]',e);}
-      },100);
-      return html;
-    };
-  }
-
-  /* Course writes: preserve original creator, scope church targets, store department + teacher metadata. */
-  window.submitCourseForm = async function(existingId,isEdit){
-    const form=$('courseForm'),u=user(); if(!form||!u) return;
-    const btn=form.querySelector('button[type="submit"]');
-    const oldHtml=btn?btn.innerHTML:'';
-    try{
-      const title=form.title.value.trim(), desc=form.desc.value.trim(), level=form.level.value;
-      const weeks=parseInt(form.weeks.value,10)||6;
-      const departmentId=form.departmentId.value;
-      if(title.length<3||desc.length<10||!departmentId){toast('Check course details','Enter a title, description and department.','error');return;}
-      const existing=isEdit?await getCourseById(existingId):null;
-      if(isEdit && (!existing || !(await canManageCourse(existing,u)))){toast('Access denied','You may view this course but cannot edit it.','error');return;}
-      let targetChurchIds=[],allChurches=false,churchId=u.churchId||'';
-      if(u.role==='superAdmin'){
-        allChurches=!!($('courseAllChurches')&&$('courseAllChurches').checked);
-        targetChurchIds=$('courseTargetChurches')?Array.from($('courseTargetChurches').selectedOptions).map(o=>o.value):[];
-        if(!allChurches && !targetChurchIds.length){toast('Select churches','Choose one or more churches or select all churches.','error');return;}
-        churchId=allChurches?'__global__':targetChurchIds[0];
-      }else if(u.role==='churchAdmin'){
-        if(!u.churchId){toast('Church missing','Your account is not assigned to a church.','error');return;}
-        churchId=u.churchId; targetChurchIds=[u.churchId];
-      }else if(u.role==='teacher'){
-        churchId=u.churchId||''; targetChurchIds=churchId?[churchId]:[];
-      }else {toast('Access denied','Your role cannot create courses.','error');return;}
-      /* Existing course scope is immutable for non-Super-Admins. */
-      if(existing && u.role!=='superAdmin'){
-        allChurches=!!existing.allChurches || existing.churchId==='__global__';
-        targetChurchIds=arr(existing.targetChurchIds).length?arr(existing.targetChurchIds).slice():(existing.churchId && existing.churchId!=='__global__'?[existing.churchId]:targetChurchIds);
-        churchId=existing.churchId || (targetChurchIds[0]||churchId);
-      }
-      const hasTeacherMulti=!!$('courseTeachersMulti');
-      let teacherEmails=hasTeacherMulti?Array.from($('courseTeachersMulti').selectedOptions).map(o=>norm(o.value)).filter(Boolean):[];
-      if(!hasTeacherMulti && existing && Array.isArray(existing.teacherEmails)) teacherEmails=existing.teacherEmails.slice();
-      const teacherEmail=hasTeacherMulti?(teacherEmails[0]||''):(u.role==='teacher'?norm(u.user):(norm($('courseTeacher')&&$('courseTeacher').value) || norm(existing&&existing.teacherEmail))); 
-      if(u.role==='teacher' && !teacherEmail) {toast('Teacher missing','Could not identify the current teacher.','error');return;}
-      const dep=await getDept(departmentId);
-      if(u.role!=='superAdmin' && dep && dep.churchId && dep.churchId!==u.churchId){toast('Department mismatch','Choose a department belonging to your church.','error');return;}
-      const gallery=window.__mediaGalleries && Array.isArray(window.__mediaGalleries.courseGallery)?window.__mediaGalleries.courseGallery.slice():[];
-      const coverImageUrl=$('courseCoverValue')?$('courseCoverValue').value:'';
-      const videoUrl=$('courseVideoUrl')?$('courseVideoUrl').value.trim():'';
-      const statusInput=form.querySelector('input[name="status"]:checked');
-      const status=statusInput?statusInput.value:'DRAFT';
-      const courseId=isEdit?existingId:(typeof newCourseId==='function'?newCourseId():'course-'+Date.now());
-      const payload={
-        id:courseId,title,desc,level,weeks,weeksCount:weeks,departmentId,
-        departmentName:dep?(dep.name||dep.title||''):'',
-        churchId, targetChurchIds, allChurches,
-        teacherEmail:teacherEmail||'', teacherEmails: teacherEmails.length?teacherEmails:(teacherEmail?[teacherEmail]:[]),
-        coverImageUrl,videoUrl,gallery,status,
-        lessons:existing?(existing.lessons||0):0,lessonsCount:existing?(existing.lessonsCount||0):0,
-        createdBy:existing?existing.createdBy:(u.user||u.email||''),
-        createdByName:existing?(existing.createdByName||u.name||u.user):(u.name||u.user||u.email),
-        createdByRole:existing?(existing.createdByRole||u.role):u.role,
-        createdAt:existing?existing.createdAt:new Date().toISOString(),
-        updatedAt:new Date().toISOString(),updatedBy:u.user||u.email||'',
-        visibility: allChurches?'ALL_CHURCHES':(u.role==='superAdmin'?'SELECTED_CHURCHES':'CHURCH_DEPARTMENT')
-      };
-      if(btn){btn.disabled=true;btn.innerHTML='<span class="loader"></span> Saving…';}
-      await FB.db.collection('courses').doc(courseId).set(payload,{merge:true});
-      if(typeof firestoreClearCache==='function') firestoreClearCache('courses');
-      toast(isEdit?'Course updated':'Course created','Course settings and assignments were saved.','success');
-      setTimeout(()=>go(u.role==='teacher'?'teacher-courses':'admin-courses'),300);
-    }catch(err){console.error('[course save]',err);toast('Save failed',err.message||'Could not save course.','error');}
-    finally{if(btn){btn.disabled=false;btn.innerHTML=oldHtml;}}
-  };
-
-  /* Department-aware course lists for teachers and church-scoped course lists for admins. */
-  window.getVisibleCoursesForTeacher = async function(){
-    const u=user(); if(!u) return [];
-    const all=await loadCourses();
-    if(u.role==='superAdmin') return all;
-    if(u.role==='churchAdmin') return all.filter(c=>targetsChurch(c,u.churchId));
-    if(u.role==='student') return all.filter(c=>c.status==='PUBLISHED' && targetsChurch(c,u.churchId||''));
-    if(u.role==='teacher'){
-      const email=norm(u.user||u.email); let courseIds=[],deptIds=[];
-      try{
-        const snap=await FB.db.collection('teacherAssignments').where('teacherEmail','==',email).get();
-        snap.docs.forEach(d=>{const a=d.data()||{};courseIds=courseIds.concat(arr(a.courseIds));deptIds=deptIds.concat(arr(a.departmentIds));});
-      }catch(e){console.warn('[teacher assignments]',e);}
-      const teacherDepartments=arr(u.departmentIds).concat(u.departmentId?[u.departmentId]:[],deptIds);
-      return all.filter(c=>targetsChurch(c,u.churchId) && (
-        norm(c.createdBy)===email || norm(c.teacherEmail)===email || arr(c.teacherEmails).some(x=>norm(x)===email) ||
-        courseIds.includes(c.id) || (c.departmentId && teacherDepartments.includes(c.departmentId))
-      ));
-    }
-    return [];
-  };
-  window.listTeacherCourses = window.getVisibleCoursesForTeacher;
-  window.listChurchCourses = async function(churchId){
-    const all=await loadCourses();
-    return all.filter(c=>targetsChurch(c,churchId));
-  };
-
-  /* Read/delete authorization. */
-  const oldSave=window.saveCourse;
-  window.saveCourse=async function(data){
-    const u=user(); if(!u) throw new Error('Sign in required');
-    const old=data && data.id?await getCourseById(data.id):null;
-    if(old && !(await canManageCourse(old,u))) throw new Error('You may not edit this course.');
-    if(old){data=Object.assign({},old,data,{createdBy:old.createdBy,createdByName:old.createdByName,createdByRole:old.createdByRole,createdAt:old.createdAt});}
-    if(typeof firestoreClearCache==='function') firestoreClearCache('courses');
-    return oldSave(data);
-  };
-  window.deleteCourse=async function(id){
-    const u=user(),c=await getCourseById(id);
-    if(!c) throw new Error('Course not found');
-    if(!(await canManageCourse(c,u))) throw new Error('Only the course creator with permission, Church Admin for its church, or Super Admin may delete this course.');
-    await FB.db.collection('courses').doc(id).delete(); if(typeof firestoreClearCache==='function') firestoreClearCache('courses');
-  };
-
-  /* Teacher/admin management cards include creator and department, with view-only access for other teachers. */
-  const originalManageCard=window.courseManageCard;
-  window.courseManageCard=function(c){
-    const u=user(); if(!u) return '';
-    const manage= (u.role==='superAdmin'||u.role==='churchAdmin'&&targetsChurch(c,u.churchId)||u.role==='teacher'&&(norm(c.createdBy)===norm(u.user)||norm(c.teacherEmail)===norm(u.user)));
-    let html=typeof originalManageCard==='function'?originalManageCard(c):'';
-    if(!html) return html;
-    const creator='<div class="muted" style="font-size:.78rem;margin-top:8px"><i class="fa-solid fa-user-pen"></i> Created by: <strong>'+safe(c.createdByName||c.createdBy||'Unknown')+'</strong>'+(c.departmentName?' · Department: '+safe(c.departmentName):'')+'</div>';
-    html=html.replace('<div class="e-card-desc">','<div class="e-card-desc">');
-    html=html.replace(/(<div class="e-card-meta">[\s\S]*?<\/div>)/, '$1'+creator);
-    if(u.role==='teacher' && !manage){
-      html=html.replace(/<button class="btn [^"]*"[^>]*onclick="[^"]*(?:course-builder|course-edit|deleteCourseConfirm|openAddStudentsToCourse)[\s\S]*?<\/button>/g,'');
-      if(!html.includes("course-read")) html=html.replace('</div>\n      + \'<div class="e-card-actions"', '</div>\n      + \'<div class="e-card-actions"');
-    }
-    return html;
-  };
-
-  /* Public/Home catalog: list all published courses, label department and creator. Actual content access is separately guarded. */
-  function patchPublicCatalog(){
-    if(typeof ROUTES==='undefined'||typeof ROUTES.courses!=='function') return false;
-    if(ROUTES.courses.__sdaCatalogPatched) return true;
-    const base=ROUTES.courses;
-    const wrapped=function(){
-      const shell=base.apply(this,arguments);
-      setTimeout(async()=>{
-        const host=$('coursesGrid'); if(!host) return;
-        try{
-          const u=user(); const all=await loadCourses();
-          let courses=all.filter(c=>c.status==='PUBLISHED');
-          let filter=null;try{const raw=sessionStorage.getItem('sda_course_filter');if(raw)filter=JSON.parse(raw);}catch(e){}
-          /* Home catalog intentionally lists every published course; course content remains permission-gated. */
-          const depts=await firestoreRead('departments',{forceRefresh:true}).catch(()=>[]);
-          courses.forEach(c=>{if(!c.departmentName){const d=depts.find(x=>x.id===c.departmentId);if(d)c.departmentName=d.name||d.title||'';}});
-          if(filter&&filter.type==='department') courses=courses.filter(c=>c.departmentId===filter.id);
-          if(!courses.length){host.innerHTML='<div class="empty" style="grid-column:1/-1"><h3>No published courses found</h3><p>Published courses will appear here when available.</p></div>';return;}
-          courses.sort((a,b)=>String(a.departmentName||'').localeCompare(String(b.departmentName||''))||String(a.title||'').localeCompare(String(b.title||'')));
-          host.innerHTML=courses.map(c=>{
-            let card=typeof window.courseCard==='function'?window.courseCard(c):'';
-            const meta='<div class="muted" style="font-size:.8rem;margin:6px 0 10px"><i class="fa-solid fa-sitemap"></i> Department: <strong>'+safe(c.departmentName||'Department')+'</strong></div>';
-            return card.replace('<div class="e-card-title">','<div class="e-card-title">').replace(/(<div class="e-card-title">[\s\S]*?<\/div>)/,'$1'+meta);
-          }).join('');
-        }catch(e){console.error('[public course catalog]',e);}
-      },180);
-      return shell;
-    };
-    wrapped.__sdaCatalogPatched=true; ROUTES.courses=wrapped; return true;
-  }
-  patchPublicCatalog();
-  let n=0;const timer=setInterval(()=>{if(patchPublicCatalog()||++n>30)clearInterval(timer);},250);
-
-  /* Keep the teacher profile's department/course scopes in sync with admin assignments.
-     Firestore rules use these fields because rules cannot query an arbitrary assignment list. */
-  const oldSaveAssignment=window.saveTeacherAssignment;
-  if(typeof oldSaveAssignment==='function'){
-    window.saveTeacherAssignment=async function(data){
-      const result=await oldSaveAssignment(data);
-      try{
-        const email=norm(data.teacherEmail);
-        const users=await firestoreRead('users',{forceRefresh:true});
-        const teacher=users.find(t=>norm(t.email||t.user)===email);
-        const uid=teacher&&(teacher.uid||teacher.id||teacher.userId);
-        if(uid){
-          await FB.db.collection('users').doc(uid).set({
-            departmentIds:arr(data.departmentIds),
-            assignedCourseIds:arr(data.courseIds),
-            assignmentUpdatedAt:new Date().toISOString()
-          },{merge:true});
-        }
-      }catch(e){console.warn('[teacher assignment profile sync]',e);}
-      return result;
-    };
-  }
-
-  /* Guard course builder/details routes at entry so URL navigation cannot bypass UI controls. */
-  ['course-builder','course-edit','course-details','course-read'].forEach(route=>{
-    const original=ROUTES && ROUTES[route]; if(typeof original!=='function'||original.__sdaCourseGuard) return;
-    const guarded=function(params){
-      const u=user();
-      const id=(params&&params.id)||(typeof routeParams!=='undefined'&&routeParams&&routeParams.id)||'';
-      if(!u){if(typeof go==='function')setTimeout(()=>go('login'),0);return '<section class="section container"><p>Please sign in.</p></section>';}
-      if(!id) return original.apply(this,arguments);
-      setTimeout(async()=>{
-        const c=await getCourseById(id); if(!c)return;
-        const ok=await canViewCourse(c,u);
-        if(!ok){if(typeof toast==='function')toast('Course unavailable','This course is not available to your account, church or department.','error');if(typeof go==='function')go('courses');return;}
-        if((route==='course-builder'||route==='course-edit') && !(await canManageCourse(c,u))){
-          if(typeof toast==='function')toast('View only','You can view this course but cannot edit or delete it.','info');
-          if(typeof go==='function')go('course-read',{id:id});
-        }
-      },0);
-      return original.apply(this,arguments);
-    };
-    guarded.__sdaCourseGuard=true;ROUTES[route]=guarded;
-  });
-
-  console.log('SDA course visibility and assignment patch installed');
 })();
 </script>
 
