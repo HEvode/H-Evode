@@ -6776,13 +6776,48 @@ function currentUser(){
   const cachedEmail = typeof cached.user === "string" ? cached.user.trim().toLowerCase() : "";
   const safeEmail = authEmail || cachedEmail;
   return {
-    uid: fbUser.uid, user: safeEmail,
+    uid: fbUser.uid, user: safeEmail, email: safeEmail,
     name: fbUser.displayName || cached.name || (safeEmail ? safeEmail.split("@")[0] : "User"),
     role: cached.role || null, churchId: cached.churchId || null,
     status: cached.status || null, photoURL: fbUser.photoURL || cached.photoURL || null
   };
 }
 window.currentUser = currentUser;
+
+/* Wait for Firebase Auth to resolve before dashboard reads. */
+async function waitForSessionEmail(timeoutMs){
+  timeoutMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 10000;
+  if(!window.FB || !FB.auth) throw new Error("Firebase Auth is not initialized.");
+  const auth = FB.auth;
+  function emailOf(user){
+    return user && typeof user.email === "string" ? user.email.trim().toLowerCase() : "";
+  }
+  const existing = auth.currentUser;
+  if(existing && emailOf(existing)) return emailOf(existing);
+  return new Promise(function(resolve, reject){
+    let settled = false, unsubscribe = null;
+    const timer = setTimeout(function(){ finish(new Error("Authentication session timed out.")); }, timeoutMs);
+    function finish(err, email){
+      if(settled) return;
+      settled = true; clearTimeout(timer);
+      if(typeof unsubscribe === "function") unsubscribe();
+      if(err) reject(err); else resolve(email);
+    }
+    unsubscribe = auth.onAuthStateChanged(function(user){
+      if(!user){ finish(new Error("No authenticated user.")); return; }
+      const email = emailOf(user);
+      if(!email){ finish(new Error("Authenticated account has no email.")); return; }
+      try{
+        let cached = JSON.parse(sessionStorage.getItem("sda_session") || "{}");
+        if(!cached || cached.uid !== user.uid) cached = {};
+        cached.uid = user.uid; cached.user = email; cached.email = email;
+        sessionStorage.setItem("sda_session", JSON.stringify(cached));
+      }catch(cacheErr){ console.warn("[session] Cache sync skipped.", cacheErr); }
+      finish(null, email);
+    }, function(err){ finish(err || new Error("Firebase Auth state failed.")); });
+  });
+}
+window.waitForSessionEmail = waitForSessionEmail;
 
 /* Force-reload the session from Firestore (used after role change) */
 async function refreshSession(){
@@ -7150,18 +7185,22 @@ async function loadStudentDashboard(){
   const host = document.getElementById("studentDashHost");
   if(!host) return;
 
+  let studentEmail = "";
+  try{
+    studentEmail = await window.waitForSessionEmail(10000);
+  }catch(sessionErr){
+    console.error("[portal-student] Session is not ready; enrollment query skipped.", sessionErr);
+    host.innerHTML = '<div class="empty"><h3>Sign-in required</h3><p class="muted">Your secure session could not be verified. Please sign in again.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
+    return;
+  }
   const u = currentUser();
-  if(!u){
-    console.warn("[portal-student] Firebase Auth session is not ready.");
-    host.innerHTML = '<div class="empty"><h3>Sign-in required</h3><p class="muted">Your secure session is not ready. Please sign in again.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
+  if(!u || !u.uid || !studentEmail || u.user !== studentEmail){
+    console.error("[portal-student] Session identity mismatch; enrollment query skipped.");
+    host.innerHTML = '<div class="empty"><h3>Session verification failed</h3><p class="muted">Please sign in again.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
     return;
   }
-  const studentEmail = String(u.user || "").trim().toLowerCase();
-  if(!studentEmail || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(studentEmail)){
-    console.error("[portal-student] No valid email available; refusing empty-email enrollment query.", {uid:u.uid,emailPresent:!!studentEmail});
-    host.innerHTML = '<div class="empty"><h3>Account email not ready</h3><p class="muted">We could not verify your signed-in email. Please sign out and sign in again. No enrollment query was sent.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
-    return;
-  }
+  u.user = studentEmail;
+  u.email = studentEmail;
 
   try{
     /* 1. Enrollments */
@@ -7556,8 +7595,15 @@ async function loadTeacherDashboard(){
   const host = document.getElementById("teacherDashHost");
   if(!host) return;
 
+  try{
+    await window.waitForSessionEmail(10000);
+  }catch(sessionErr){
+    console.error("[loadTeacherDashboard] Session is not ready; dashboard reads skipped.", sessionErr);
+    host.innerHTML = '<div class="empty"><h3>Sign-in required</h3><p class="muted">Your secure session could not be verified. Please sign in again.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
+    return;
+  }
   const u = currentUser();
-  if(!u) return;
+  if(!u || !u.uid) return;
 
   try{
     /* 1. My courses */
@@ -7879,8 +7925,15 @@ async function loadChurchAdminDashboard(){
   const host = document.getElementById("churchAdminDashHost");
   if(!host) return;
 
+  try{
+    await window.waitForSessionEmail(10000);
+  }catch(sessionErr){
+    console.error("[loadChurchAdminDashboard] Session is not ready; dashboard reads skipped.", sessionErr);
+    host.innerHTML = '<div class="empty"><h3>Sign-in required</h3><p class="muted">Your secure session could not be verified. Please sign in again.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
+    return;
+  }
   const u = currentUser();
-  if(!u) return;
+  if(!u || !u.uid) return;
 
   const churchId = getCurrentChurchId();
 
@@ -8064,8 +8117,15 @@ async function loadSuperAdminDashboard(){
   const host = document.getElementById("superAdminDashHost");
   if(!host) return;
 
+  try{
+    await window.waitForSessionEmail(10000);
+  }catch(sessionErr){
+    console.error("[loadSuperAdminDashboard] Session is not ready; dashboard reads skipped.", sessionErr);
+    host.innerHTML = '<div class="empty"><h3>Sign-in required</h3><p class="muted">Your secure session could not be verified. Please sign in again.</p><button class="btn btn-primary" onclick="go(\'login\')">Go to login</button></div>';
+    return;
+  }
   const u = currentUser();
-  if(!u) return;
+  if(!u || !u.uid) return;
 
   try{
     const [allUsers, allChurches, allCourses, allEnrollments] = await Promise.all([
