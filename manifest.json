@@ -1,16 +1,19 @@
 {
+  "id": "/",
   "name": "SDA Learning Platform",
   "short_name": "SDA Learn",
   "description": "Free multi-church LMS for Seventh-day Adventist churches. Study Bible, Music, Youth Ministry and more.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
   "theme_color": "#0E45EB",
   "background_color": "#FAF8F3",
   "lang": "en",
   "dir": "ltr",
   "categories": ["education", "productivity"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icons/icon-192.png",
@@ -25,30 +28,70 @@
       "purpose": "any"
     },
     {
+      "src": "/icons/icon-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
       "src": "/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     }
   ],
+  "screenshots": [
+    {
+      "src": "/screenshots/home.png",
+      "sizes": "1080x1920",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Home — browse SDA courses and events"
+    },
+    {
+      "src": "/screenshots/dashboard.png",
+      "sizes": "1920x1080",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Student dashboard with courses and progress"
+    }
+  ],
   "shortcuts": [
     {
       "name": "Browse Courses",
       "short_name": "Courses",
-      "url": "/#courses",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+      "description": "View all published courses",
+      "url": "/?route=courses",
+      "icons": [
+        { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
     },
     {
       "name": "My Dashboard",
       "short_name": "Dashboard",
-      "url": "/#portal-student",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+      "description": "Open your student or teacher dashboard",
+      "url": "/?route=portal-student",
+      "icons": [
+        { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
     },
     {
       "name": "Reading Library",
       "short_name": "Library",
-      "url": "/#reading-library",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+      "description": "Open the online reading library",
+      "url": "/?route=reading-library",
+      "icons": [
+        { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Verify Certificate",
+      "short_name": "Verify",
+      "description": "Verify a certificate by ID",
+      "url": "/?route=verify",
+      "icons": [
+        { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
     }
   ]
 }
